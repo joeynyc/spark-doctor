@@ -1,0 +1,24 @@
+backends:
+  vllm:
+    known_images:
+      - nvcr.io/nvidia/vllm
+      - vllm/vllm-openai
+  ollama:
+    known_images:
+      - ollama/ollama
+  llama.cpp:
+    known_images:
+      - ghcr.io/ggerganov/llama.cpp
+  sglang:
+    known_images:
+      - lmsysorg/sglang
+  open-webui:
+    known_images:
+      - ghcr.io/open-webui/open-webui
+  comfyui:
+    known_images:
+      - ghcr.io/comfyanonymous/comfyui
+
+arch_incompatible_hints:
+  - x86_64-only
+  - amd64-only

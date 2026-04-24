@@ -1,0 +1,9 @@
+name: bad-vllm-single-spark
+backend: vllm
+model: example/model
+hardware:
+  nodes: 1
+  gpus_per_node: 1
+runtime:
+  tensor_parallel_size: 2
+  gpu_memory_utilization: 0.90

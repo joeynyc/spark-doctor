@@ -1,0 +1,26 @@
+{
+  "schema_version": "0.1",
+  "created_at": "2026-04-24T13:05:01",
+  "spark_doctor_version": "0.1.0",
+  "anonymized": true,
+  "os": {"uname": "Linux spark 6.8.0-aarch64 #1 SMP Thu Jan 1 00:00:00 UTC 2026 aarch64 GNU/Linux", "arch": "aarch64"},
+  "gpu": {"available": true, "gpu_count": 1, "name": "NVIDIA GB10"},
+  "gpu_samples": [
+    {"timestamp": "2026-04-24T13:05:01", "gpu_utilization_percent": 94, "gpu_power_draw_watts": 14.0, "gpu_clock_mhz": 611, "gpu_temperature_c": 45},
+    {"timestamp": "2026-04-24T13:05:02", "gpu_utilization_percent": 96, "gpu_power_draw_watts": 14.5, "gpu_clock_mhz": 620, "gpu_temperature_c": 46},
+    {"timestamp": "2026-04-24T13:05:03", "gpu_utilization_percent": 93, "gpu_power_draw_watts": 13.8, "gpu_clock_mhz": 605, "gpu_temperature_c": 45}
+  ],
+  "memory": {
+    "mem_total_kb": 126000000,
+    "mem_available_kb": 90000000,
+    "swap_total_kb": 16000000,
+    "swap_free_kb": 16000000,
+    "psi_memory": {},
+    "psi_io": {}
+  },
+  "docker": {},
+  "network": {},
+  "processes": [],
+  "collector_statuses": [],
+  "findings": []
+}
