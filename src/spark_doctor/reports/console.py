@@ -28,6 +28,18 @@ def render_console(report: ScanReport, console: Console | None = None) -> None:
     console.print()
     console.print(Panel.fit(Text(f"Spark Doctor Scan — Overall: {status}", style=color)))
 
+    peak = (report.gpu or {}).get("peak") if isinstance(report.gpu, dict) else None
+    if peak:
+        util = peak.get("gpu_utilization_percent")
+        pwr = peak.get("gpu_power_draw_watts")
+        clk = peak.get("gpu_clock_mhz")
+        tmp = peak.get("gpu_temperature_c")
+        console.print(
+            f"[dim]GPU peak during scan: util={util}%, power={pwr} W, "
+            f"clock={clk} MHz, temp={tmp} C  "
+            f"(samples={len(report.gpu_samples)}, sampler={report.gpu.get('sampler')})[/]"
+        )
+
     if not report.findings:
         console.print("[green]No issues detected by MVP rule set.[/]")
     else:
