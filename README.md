@@ -29,7 +29,7 @@ spark-doctor version
 
 Exit codes: `0` clean · `1` warning · `2` critical · `3` collector failure.
 
-## Rules (MVP)
+## What it detects
 
 | ID | Detects |
 |---|---|
