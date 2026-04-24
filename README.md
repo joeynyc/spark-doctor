@@ -71,4 +71,4 @@ New rules go in `src/spark_doctor/rules/`, register in `rules/engine.py`, add a 
 
 ## License
 
-Apache-2.0.
+MIT.

@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Local diagnostic CLI for NVIDIA DGX Spark"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "Apache-2.0" }
+license = { text = "MIT" }
 authors = [{ name = "Joey" }]
 dependencies = [
     "typer>=0.12",
