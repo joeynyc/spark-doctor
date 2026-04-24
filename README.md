@@ -4,6 +4,12 @@ Local diagnostic CLI for NVIDIA DGX Spark. Collects system, GPU, memory, Docker,
 
 Read-only. No dashboard. No auto-fixes. No telemetry.
 
+## Why
+
+DGX Spark is a new platform. When something goes wrong, the signal is scattered across `nvidia-smi`, `/proc/pressure/*`, `dmesg`, `docker info`, backend logs, forum threads, and Field Diagnostics. Owners hit the same issues repeatedly — GPU stuck in a 14 W low-power state, unified memory pressure stalling inference, thermal shutdowns, Docker runtime not registered, recipes with `tensor_parallel_size` set for a multi-GPU box.
+
+Spark Doctor collects those signals in one command, applies DGX Spark-specific rules, and tells you the likely cause and the next step — in plain English, with the evidence attached.
+
 ## Install
 
 ```bash
