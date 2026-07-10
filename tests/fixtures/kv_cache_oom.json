@@ -1,0 +1,23 @@
+{
+  "schema_version": "0.1",
+  "created_at": "2026-04-24T13:05:01",
+  "spark_doctor_version": "0.1.0",
+  "anonymized": true,
+  "os": {},
+  "gpu": {"available": true, "name": "NVIDIA GB10"},
+  "gpu_samples": [],
+  "memory": {
+    "mem_total_kb": 126000000,
+    "mem_available_kb": 40000000,
+    "psi_memory": {"full": {"avg10": 0.0}},
+    "psi_io": {}
+  },
+  "logs": {
+    "journal_tail": "vllm INFO 04-24 13:04:58 gpu_worker.py:277] Available KV cache memory: -2.14 GiB\nvllm ERROR 04-24 13:04:59 core.py:512] ValueError: No available memory for the cache blocks. Try increasing `gpu_memory_utilization` when initializing the engine."
+  },
+  "docker": {},
+  "network": {},
+  "processes": [],
+  "collector_statuses": [],
+  "findings": []
+}

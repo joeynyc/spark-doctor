@@ -52,6 +52,7 @@ Exit codes: `0` clean · `1` warning · `2` critical · `3` collector failure.
 | `cuda.libcudart_missing` | Package linked against a CUDA runtime (`libcudart.so.N`) that is not installed. |
 | `cuda.sm121_not_in_arch_list` | PyTorch build ships no SM_121 kernels for GB10. |
 | `cuda.nvcc_toolkit_mismatch` | `nvcc` on PATH is older than the driver's CUDA version. |
+| `backend.kv_cache_oom` | vLLM "No available memory for the cache blocks" — CUDA-graph memory squeezed out the KV cache (fix: `--enforce-eager`), a distinct failure from host `memory.uma_pressure`. |
 
 Recipe validator checks tensor-parallel vs GPU count, container image registry, arm64 compatibility, memory budget, and aggressive `gpu_memory_utilization` / context lengths.
 
