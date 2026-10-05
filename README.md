@@ -24,6 +24,14 @@ pip install -e .
 
 Requires Python 3.11+.
 
+### Shell completion
+
+```bash
+spark-doctor --install-completion   # bash, zsh, fish, or PowerShell
+```
+
+Restart your shell afterwards. Use `--show-completion` to print the script instead of installing it.
+
 ## Commands
 
 ```bash

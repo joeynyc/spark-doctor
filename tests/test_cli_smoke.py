@@ -33,3 +33,17 @@ def test_recipe_check_fails_for_bad_tp():
     result = runner.invoke(app, ["recipe", "check", str(FIXTURES / "recipe_tp_too_high.yaml")])
     assert result.exit_code == 2
     assert "FAIL" in result.stdout
+
+
+def test_shell_completion_suggests_report_formats():
+    result = runner.invoke(
+        app,
+        [],
+        prog_name="spark-doctor",
+        env={
+            "_SPARK_DOCTOR_COMPLETE": "complete_bash",
+            "COMP_WORDS": "spark-doctor report --format ",
+            "COMP_CWORD": "3",
+        },
+    )
+    assert result.stdout.split() == ["markdown", "forum", "github"]
