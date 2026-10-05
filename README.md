@@ -24,6 +24,30 @@ pip install -e .
 
 Requires Python 3.11+.
 
+### Nix
+
+```bash
+nix run github:joeynyc/spark-doctor -- scan
+```
+
+On NixOS, add the flake as an input and install the package:
+
+```nix
+inputs.spark-doctor = {
+  url = "github:joeynyc/spark-doctor";
+  inputs.nixpkgs.follows = "nixpkgs";
+};
+
+# in a module
+environment.systemPackages = [
+  inputs.spark-doctor.packages.${pkgs.stdenv.hostPlatform.system}.default
+];
+```
+
+The package does not bundle `nvidia-smi`, `docker` or the other tools the
+collectors call. It uses the ones on the host `PATH`, so it reports on the
+system's own driver and runtime.
+
 ## Commands
 
 ```bash

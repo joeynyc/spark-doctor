@@ -9,3 +9,7 @@ build/
 *.egg
 .coverage
 SESSION_NOTES.txt
+
+# Nix
+result
+result-*
