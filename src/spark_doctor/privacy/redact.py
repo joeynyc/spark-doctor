@@ -58,9 +58,12 @@ MAC_RE = re.compile(r"\b(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\b")
 IPV6_CANDIDATE_RE = re.compile(
     r"(?<!\w)[0-9A-Fa-f:.]+(?:%[A-Za-z0-9_.~-]+)?"
 )
-HARDWARE_KEY_RE = re.compile(r"(?:serial(?:[ _-]*number)?|(?:gpu[ _-]*)?uuid)", re.IGNORECASE)
+RDMA_GUID_LABEL = r"(?:node|port|system[ _-]*image)[ _-]*guid"
+HARDWARE_KEY_RE = re.compile(
+    rf"(?:serial(?:[ _-]*number)?|(?:gpu[ _-]*)?uuid|{RDMA_GUID_LABEL})", re.IGNORECASE
+)
 HARDWARE_LINE_RE = re.compile(
-    r"^([ \t|+`?\-\u2500-\u257f]*(?:serial(?:[ _-]*number)?|uuid)[ \t]*:[ \t]*)[^ \t\r\n][^\r\n]*",
+    rf"^([ \t|+`?\-\u2500-\u257f]*(?:serial(?:[ _-]*number)?|uuid|{RDMA_GUID_LABEL})[ \t]*:[ \t]*)[^ \t\r\n][^\r\n]*",
     re.IGNORECASE | re.MULTILINE,
 )
 GPU_UUID_RE = re.compile(
