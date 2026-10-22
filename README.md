@@ -8,6 +8,8 @@ Read-only. No dashboard. No auto-fixes. No telemetry.
   <img src="assets/spark-doctor-hero.png" alt="Spark Doctor open-source diagnostic CLI for NVIDIA DGX Spark" width="100%">
 </p>
 
+**Follow [@aijoey](https://x.com/aijoey) on X** for DGX Spark benchmarks, configs and new recipes.
+
 ## Why
 
 DGX Spark is a new platform. When something goes wrong, the signal is scattered across `nvidia-smi`, `/proc/pressure/*`, `dmesg`, `docker info`, backend logs, forum threads, and Field Diagnostics. Owners hit the same issues repeatedly — GPU stuck in a 14 W low-power state, unified memory pressure stalling inference, thermal shutdowns, Docker runtime not registered, recipes with `tensor_parallel_size` set for a multi-GPU box.
