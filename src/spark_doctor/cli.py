@@ -29,12 +29,14 @@ from .recipes.validator import load_recipe, validate_recipe
 from .reports import render_console, render_forum, render_github, render_markdown
 from .rules import run_rules
 
-app = typer.Typer(add_completion=False, help="Spark Doctor: local diagnostic CLI for DGX Spark.")
+app = typer.Typer(help="Spark Doctor: local diagnostic CLI for DGX Spark.")
 recipe_app = typer.Typer(add_completion=False, help="Recipe validation commands.")
 app.add_typer(recipe_app, name="recipe")
 
 console = Console()
 Collected = TypeVar("Collected")
+
+REPORT_FORMATS = ("markdown", "forum", "github")
 
 
 def _exit_code_for(report: ScanReport) -> int:
@@ -202,7 +204,12 @@ def doctor(
 @app.command()
 def report(
     from_file: Path = typer.Option(..., "--from", help="Path to scan JSON."),
-    format: str = typer.Option("markdown", "--format", help="markdown | forum | github"),
+    format: str = typer.Option(
+        "markdown",
+        "--format",
+        help=" | ".join(REPORT_FORMATS),
+        autocompletion=lambda incomplete: [f for f in REPORT_FORMATS if f.startswith(incomplete)],
+    ),
     out: Optional[Path] = typer.Option(None, "--out", help="Write to path instead of stdout."),
     include_sensitive_data: bool = typer.Option(False, "--include-sensitive-data", help="Keep raw identifiers and credentials in output."),
     include_network_identifiers: bool = typer.Option(False, "--include-network-identifiers"),
