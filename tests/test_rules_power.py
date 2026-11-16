@@ -122,14 +122,23 @@ def test_low_draw_with_low_clock_stays_critical() -> None:
     assert finding.confidence == "high"
 
 
-def test_missing_clock_is_called_out_and_not_high_confidence() -> None:
-    report = ScanReport(gpu_samples=[_low_sample(clock=None) for _ in range(3)])
+@pytest.mark.parametrize(
+    "clocks",
+    [
+        [2400, 2400, 790],
+        [None, None, None],
+        [611, None, 611],
+        [900, 900, 900],
+    ],
+)
+def test_sustained_low_draw_without_all_low_clocks_is_unconfirmed_warning(
+    clocks: list[float | None],
+) -> None:
+    report = ScanReport(gpu_samples=[_low_sample(clock=c) for c in clocks])
     finding = rule_power_low_draw_under_load.fn(report)[0]
-    assert finding.severity == "critical"
+    assert finding.severity == "warning"
     assert finding.confidence != "high"
-    assert any("clock was not reported" in line for line in finding.evidence)
-
-
-def test_ambiguous_clock_keeps_existing_behaviour() -> None:
-    report = ScanReport(gpu_samples=[_low_sample(clock=900) for _ in range(3)])
-    assert rule_power_low_draw_under_load.fn(report)[0].severity == "critical"
+    advice = " ".join(finding.recommended_actions).lower()
+    assert "sample" in advice
+    assert "unplug" not in advice and "shut down" not in advice
+    assert not finding.escalation_actions

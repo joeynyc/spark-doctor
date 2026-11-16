@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from ..models import Finding, ScanReport
@@ -168,6 +169,11 @@ def _eval_libcudart_import_failure(report: ScanReport) -> list[Finding]:
     ]
 
 
+# Cubins run on later minor revisions of the same major, so sm_120 kernels (the official
+# cu130 wheels) run on GB10's sm_121. Arch-specific sm_120a cubins do not.
+_GB10_COMPATIBLE_ARCH = re.compile(r"sm_120|sm_121a?|compute_121a?")
+
+
 def _eval_sm121_arch_missing(report: ScanReport) -> list[Finding]:
     py = _python_info(report)
     if not py.get("torch_import_ok") or not _is_gb10(report):
@@ -175,7 +181,7 @@ def _eval_sm121_arch_missing(report: ScanReport) -> list[Finding]:
     arch_list = py.get("torch_arch_list")
     if not isinstance(arch_list, list) or not arch_list:
         return []
-    if any("121" in str(a) for a in arch_list):
+    if any(_GB10_COMPATIBLE_ARCH.fullmatch(str(a)) for a in arch_list):
         return []
 
     return [

@@ -4,6 +4,21 @@ from ..models import Finding, ScanReport
 from .engine import Rule
 
 
+PSI_FULL_WARNING = 1.0
+PSI_FULL_CRITICAL = 5.0
+PSI_SOME_WARNING = 10.0
+
+
+def _psi_avg10(psi: object, scope: str) -> float | None:
+    if not isinstance(psi, dict):
+        return None
+    entry = psi.get(scope)
+    if not isinstance(entry, dict):
+        return None
+    value = entry.get("avg10")
+    return float(value) if isinstance(value, (int, float)) else None
+
+
 def _evaluate(report: ScanReport) -> list[Finding]:
     mem = report.memory
     if mem is None:
@@ -22,13 +37,11 @@ def _evaluate(report: ScanReport) -> list[Finding]:
         mem_total_gb = mem.mem_total_kb / (1024 * 1024)
         evidence.append(f"MemTotal {mem_total_gb:.1f} GB")
 
-    psi_full_avg10 = None
-    if isinstance(mem.psi_memory, dict):
-        full = mem.psi_memory.get("full")
-        if isinstance(full, dict):
-            psi_full_avg10 = full.get("avg10")
-            if psi_full_avg10 is not None:
-                evidence.append(f"memory PSI full avg10 {psi_full_avg10:.2f}")
+    # PSI avg10 is the percent (0-100) of the last 10 s that tasks were stalled on memory.
+    psi_some_avg10 = _psi_avg10(mem.psi_memory, "some")
+    psi_full_avg10 = _psi_avg10(mem.psi_memory, "full")
+    if psi_full_avg10 is not None:
+        evidence.append(f"memory PSI full avg10 {psi_full_avg10:.1f}%")
 
     swap_used_gb = None
     if mem.swap_total_kb is not None and mem.swap_free_kb is not None:
@@ -46,10 +59,14 @@ def _evaluate(report: ScanReport) -> list[Finding]:
             warn = True
 
     if psi_full_avg10 is not None:
-        if psi_full_avg10 > 0.25:
+        if psi_full_avg10 >= PSI_FULL_CRITICAL:
             critical = True
-        elif psi_full_avg10 > 0.10:
+        elif psi_full_avg10 >= PSI_FULL_WARNING:
             warn = True
+
+    if psi_some_avg10 is not None and psi_some_avg10 >= PSI_SOME_WARNING:
+        warn = True
+        evidence.append(f"memory PSI some avg10 {psi_some_avg10:.1f}%")
 
     if swap_used_gb is not None and swap_used_gb > 8:
         warn = True

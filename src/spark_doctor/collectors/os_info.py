@@ -69,7 +69,8 @@ def collect_os() -> tuple[dict[str, Any], CollectorStatus]:
             if len(parts) == 2 and parts[1]:
                 packages[parts[0]] = parts[1]
         out["packages"] = packages
-    if not pkg.ok:
+    # A non-Debian host has no dpkg; that is not a gap in the diagnosis.
+    if not pkg.ok and pkg.error != "command_not_found":
         status.errors.append(f"dpkg-query: {pkg.error}")
 
     if not status.errors:

@@ -1,13 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
 from spark_doctor import cli
+from spark_doctor.collectors import logs as logs_collector
 from spark_doctor.models import CollectorStatus, Finding, MemorySnapshot, ProcessInfo, ScanReport
+from spark_doctor.shell import ShellResult
 
 runner = CliRunner()
 
@@ -100,7 +104,9 @@ def test_recipe_cli_rejects_nonfinite_memory(value: str) -> None:
         "--mem-available-gb", value,
     ])
     assert result.exit_code == 2
-    assert "finite" in result.output or "range" in result.output
+    # Usage error before validation runs; the message wording varies across Typer versions.
+    assert "Recipe Check" not in result.output
+    assert "Traceback" not in result.output
 
 
 def test_numeric_psi_string_cannot_hide_low_memory(tmp_path: Path) -> None:
@@ -128,7 +134,7 @@ def test_loaded_reports_are_redacted_by_default(tmp_path: Path, command: str) ->
     secret = "hf_abcdefghijklmnopqrstuvwxyz123456"
     path = tmp_path / "raw.json"
     path.write_text(ScanReport(anonymized=False, logs={
-        "journal_tail": f"No available memory for the cache blocks; {secret}",
+        "journal_tail": f"vllm ERROR No available memory for the cache blocks; {secret}",
     }).model_dump_json())
     result = runner.invoke(cli.app, [command, "--from", str(path)], env={"COLUMNS": "240"})
     assert result.exit_code in (0, 2)
@@ -260,16 +266,29 @@ def test_imported_report_exports_respect_identifier_privacy_flags(
     assert (uuid in result.stdout) is keep_hardware
 
 
-KV_OOM_LOG = "ValueError: No available memory for the cache blocks."
+KV_OOM_LOG = "Nov 16 10:00:00 spark python3[812]: vllm ERROR ValueError: No available memory for the cache blocks."
 
 
-def _logs(monkeypatch: pytest.MonkeyPatch, *, ok: bool = True, calls: list[str] | None = None) -> None:
-    def fake() -> tuple[dict[str, str], CollectorStatus]:
+def _shell(stdout: str = "", *, stderr: str = "", error: str | None = None) -> ShellResult:
+    return ShellResult("probe", error is None, 1 if error else 0, stdout, stderr, error)
+
+
+def _logs(
+    monkeypatch: pytest.MonkeyPatch, *, ok: bool = True, calls: list[str] | None = None,
+    dmesg: str = "", kernel: str = "", journal: str = KV_OOM_LOG,
+) -> None:
+    def fake_run(args: list[str], **kw: object) -> ShellResult:
         if calls is not None:
-            calls.append("logs")
-        errors = [] if ok else ["dmesg: nonzero_exit: Operation not permitted"]
-        return ({"journal_tail": KV_OOM_LOG} if ok else {}), CollectorStatus(name="logs", ok=ok, errors=errors)
-    monkeypatch.setattr(cli, "collect_logs", fake)
+            calls.append(args[0])
+        if not ok:
+            return _shell(stderr="Operation not permitted", error="nonzero_exit")
+        if args[0] == "dmesg":
+            return _shell(dmesg) if dmesg else _shell(stderr="Operation not permitted", error="nonzero_exit")
+        if "-k" in args:
+            return _shell(kernel or "-- No entries --")
+        return _shell(journal)
+    monkeypatch.setattr(logs_collector, "run", fake_run)
+    monkeypatch.setattr(cli, "collect_logs", logs_collector.collect_logs)
 
 
 def test_default_scan_runs_log_rules_without_shipping_logs(
@@ -306,3 +325,89 @@ def test_unreadable_logs_only_fail_scan_when_requested(collectors: None, monkeyp
     assert "Operation not permitted" in default.stdout
     requested = runner.invoke(cli.app, ["scan", "--no-save", "--include-logs"])
     assert requested.exit_code == 3
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
+UNRELATED = "usb 1-1: new high-speed USB device number 7 using xhci_hcd"
+DMESG_OOM = "[Mon Nov 16 09:59:44 2026] Out of memory: Killed process 4242 (python3) total-vm:98765432kB"
+KERNEL_XID = "Nov 16 09:58:10 spark kernel: NVRM: Xid (PCI:000f:01:00): 79, pid=1, GPU has fallen off the bus."
+
+
+def test_default_saved_scan_reproduces_log_findings(
+    collectors: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _logs(
+        monkeypatch,
+        dmesg=f"[Mon Nov 16 09:00:00 2026] {UNRELATED}\n{DMESG_OOM}",
+        kernel=f"Nov 16 09:00:00 spark kernel: {UNRELATED}\n{KERNEL_XID}",
+    )
+    output = tmp_path / "scan.json"
+    scanned = runner.invoke(cli.app, ["scan", "--no-save", "--json", str(output)])
+    saved_text = output.read_text()
+    saved = json.loads(saved_text)
+    assert scanned.exit_code == 2
+    assert saved["logs"] == {}
+    assert UNRELATED not in saved_text
+    assert {e["signal"] for e in saved["log_evidence"]} == {"oom_kill", "xid", "kv_cache_oom"}
+
+    log_rules = {"memory.oom_killer", "gpu.xid_error", "backend.kv_cache_oom"}
+    at_scan = sorted((f["rule_id"], f["severity"]) for f in saved["findings"] if f["rule_id"] in log_rules)
+    assert [r for r, _ in at_scan] == sorted(log_rules)
+    reloaded = ScanReport.model_validate_json(saved_text)
+    rerun = sorted((f.rule_id, f.severity) for f in cli.run_rules(reloaded) if f.rule_id in log_rules)
+    assert rerun == at_scan
+    doctor = runner.invoke(cli.app, ["doctor", "--from", str(output)], env={"COLUMNS": "240"})
+    assert doctor.exit_code == scanned.exit_code
+    assert all(rule in doctor.stdout for rule in log_rules)
+
+
+@pytest.mark.parametrize("option", ["--json", "--markdown"])
+def test_scan_unwritable_output_exits_incomplete(collectors: None, tmp_path: Path, option: str) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    result = runner.invoke(cli.app, ["scan", "--no-save", option, str(blocker / "out")])
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "Spark Doctor Scan" in result.stdout
+
+
+def test_scan_unwritable_default_save_exits_incomplete(
+    collectors: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".spark-doctor").write_text("")
+    result = runner.invoke(cli.app, ["scan"])
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+    assert "Spark Doctor Scan" in result.stdout
+
+
+@pytest.mark.parametrize("command", ["report", "anonymize"])
+def test_export_unwritable_output_exits_incomplete(tmp_path: Path, command: str) -> None:
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    scan = str(FIXTURES / "healthy_minimal.json")
+    args = [command, scan] if command == "anonymize" else [command, "--from", scan]
+    result = runner.invoke(cli.app, [*args, "--out", str(blocker / "out")])
+    assert result.exit_code == 3
+    assert isinstance(result.exception, SystemExit)
+
+
+def test_default_save_is_private_and_never_clobbers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.chdir(tmp_path)
+    report = ScanReport()
+    first, second = cli._save_default(report), cli._save_default(report)
+    assert first != second
+    assert stat.S_IMODE(first.stat().st_mode) == 0o600
+    assert stat.S_IMODE(cli.REPORTS_DIR.stat().st_mode) == 0o700
+
+
+def test_explicit_json_output_is_private(collectors: None, tmp_path: Path) -> None:
+    output = tmp_path / "scan.json"
+    runner.invoke(cli.app, ["scan", "--no-save", "--json", str(output)])
+    assert stat.S_IMODE(os.stat(output).st_mode) == 0o600
+
+
+def test_report_rejects_unknown_format_before_loading(tmp_path: Path) -> None:
+    result = runner.invoke(cli.app, ["report", "--from", str(tmp_path / "missing.json"), "--format", "bogus"])
+    assert result.exit_code == 2

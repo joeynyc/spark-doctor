@@ -8,7 +8,8 @@ from ..shell import run
 
 
 def collect_firmware(use_sudo: bool = False) -> tuple[dict[str, Any], CollectorStatus]:
-    status = CollectorStatus(name="firmware", ok=True)
+    # Firmware data feeds no rule, so probe failures are notes rather than an incomplete scan.
+    status = CollectorStatus(name="firmware", ok=True, optional=True)
     out: dict[str, Any] = {}
     # Privacy matching depends on stable labels, including with gettext LANGUAGE set.
     probe_environment = {**os.environ, "LC_ALL": "C", "LANG": "C", "LANGUAGE": "C"}

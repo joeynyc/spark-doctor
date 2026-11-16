@@ -1,27 +1,31 @@
 from __future__ import annotations
 
+import re
+
+from .. import log_evidence
 from ..models import Finding, ScanReport
 from .engine import Rule
 
-THERMAL_LOG_KEYWORDS = ("thermal shutdown", "over temperature", "overheat", "thermal event", "critical temperature")
+# Evidence format written by spark-doctor versions that matched thermal keywords in raw tails.
+_LEGACY_LOG_EVIDENCE = re.compile(r"^(?:dmesg_tail|journal_tail) contains '")
+
+
+def _had_log_evidence(finding: Finding) -> bool:
+    return any(_LEGACY_LOG_EVIDENCE.match(e) for e in finding.evidence)
 
 
 def _evaluate(report: ScanReport) -> list[Finding]:
+    carried = log_evidence.carried_over(report, "thermal.shutdown_risk", _had_log_evidence)
+    if carried:
+        return carried
+
     max_temp = None
     for s in report.gpu_samples:
         if s.gpu_temperature_c is not None:
             if max_temp is None or s.gpu_temperature_c > max_temp:
                 max_temp = s.gpu_temperature_c
 
-    log_hits: list[str] = []
-    for key in ("dmesg_tail", "journal_tail"):
-        text = report.logs.get(key) if isinstance(report.logs, dict) else None
-        if not text:
-            continue
-        low = text.lower()
-        for kw in THERMAL_LOG_KEYWORDS:
-            if kw in low:
-                log_hits.append(f"{key} contains '{kw}'")
+    log_hits = [f"Kernel log: {e.line[:200]}" for e in log_evidence.lines_for(report, "thermal")]
 
     if max_temp is None and not log_hits:
         return []
@@ -37,6 +41,8 @@ def _evaluate(report: ScanReport) -> list[Finding]:
     if max_temp is not None:
         evidence.append(f"Peak GPU temperature {max_temp:.1f} C")
     evidence.extend(log_hits[:5])
+    if len(log_hits) > 5:
+        evidence.append(f"{len(log_hits) - 5} more thermal kernel message(s) since boot")
 
     return [
         Finding(

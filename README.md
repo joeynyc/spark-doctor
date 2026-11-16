@@ -40,7 +40,9 @@ spark-doctor self-test
 spark-doctor version
 ```
 
-Exit codes for `scan` and `doctor`: `0` clean · `1` warning · `2` critical · `3` incomplete diagnosis (collector or rule failure). Incomplete diagnosis takes precedence over finding severity; existing warning/critical findings remain visible. Exporting a report succeeds with `0` even if the saved diagnosis is incomplete; the exported report retains that status.
+Exit codes for `scan` and `doctor`: `0` clean · `1` warning · `2` critical · `3` incomplete diagnosis (collector or rule failure). Incomplete diagnosis takes precedence over finding severity; existing warning/critical findings remain visible. Exporting a report succeeds with `0` even if the saved diagnosis is incomplete; the exported report retains that status. Any command that cannot write an output file (`--json`, `--markdown`, `--out`, or the default `.spark-doctor/reports/` save) prints a one-line error and exits `3`; `scan` still prints its findings first.
+
+Report files are created owner-only (`0600`), and `.spark-doctor/reports/` is created `0700`. Each scan saves to a new timestamped file and never overwrites an earlier one.
 
 CUDA/package checks inspect `python3` on PATH unless you select a workload interpreter with `--python`. Reports identify the selected environment; a scan does not inspect other virtual environments or container Python installations automatically. If PyTorch cannot be imported there, its CUDA compatibility has not been assessed.
 
@@ -51,15 +53,15 @@ An explicitly CPU-tagged PyTorch build with no CUDA support produces a warning f
 | ID | Detects |
 |---|---|
 | `power.low_draw_under_load` | High GPU utilization with suspiciously low power draw (e.g. 14 W cap). Downgraded to info when the GPU clock is normal, since memory-bound decode draws little power at boost clock. |
-| `thermal.shutdown_risk` | GPU temp ≥ 85/90 C or thermal events in logs. |
-| `memory.uma_pressure` | Low `MemAvailable`, high memory PSI, or heavy swap use. |
+| `thermal.shutdown_risk` | GPU temp ≥ 85/90 C, or a thermal message in this boot's kernel log. |
+| `memory.uma_pressure` | Low `MemAvailable`, memory PSI `avg10` (percent of time stalled: warning at full ≥ 1% or some ≥ 10%, critical at full ≥ 5%), or heavy swap use. |
 | `runtime.docker_unhealthy` | Docker/NVIDIA container runtime missing or misconfigured. |
 | `backend.multiple_heavy_models` | Two or more heavy model backends running concurrently. |
 | `cuda.torch_cu12_wheel` | PyTorch built for CUDA 12 on a CUDA 13 / GB10 system. |
 | `cuda.libcudart_missing` | Package linked against a CUDA runtime (`libcudart.so.N`) that is not installed. |
-| `cuda.sm121_not_in_arch_list` | PyTorch build ships no SM_121 kernels for GB10. |
+| `cuda.sm121_not_in_arch_list` | PyTorch build ships no kernels that run on GB10 (`sm_120`, `sm_121`, or `sm_121a`); arch-specific `sm_120a` alone does not count. |
 | `cuda.nvcc_toolkit_mismatch` | `nvcc` on PATH is older than the driver's CUDA version. |
-| `backend.kv_cache_oom` | vLLM "No available memory for the cache blocks" — CUDA-graph memory squeezed out the KV cache (fix: `--enforce-eager`), a distinct failure from host `memory.uma_pressure`. |
+| `backend.kv_cache_oom` | vLLM "No available memory for the cache blocks" in the system journal, on a line that mentions vLLM — CUDA-graph memory squeezed out the KV cache (fix: `--enforce-eager`), a distinct failure from host `memory.uma_pressure`. |
 | `memory.oom_killer` | Kernel OOM killer fired this boot (critical), or a container hit its own memory limit (warning). |
 | `gpu.xid_error` | `NVRM: Xid` GPU errors this boot; driver/hardware-class Xids are critical, application-class ones a warning. |
 | `network.nic_link_below_1g` | An active interface with a known link speed below 1 Gb/s. |
@@ -67,30 +69,37 @@ An explicitly CPU-tagged PyTorch build with no CUDA support produces a warning f
 | `cuda.aarch64_prebuilt_wheel_gap` | Optional flash-attn or bitsandbytes imports fail or report a CPU-only build on aarch64 + GB10. |
 | `cuda.torch_cpu_only` | The selected Python successfully imports an explicitly CPU-tagged PyTorch build with no CUDA support. |
 
+OOM, Xid and thermal log checks search the whole current-boot kernel log (`dmesg` and `journalctl -k -b`), not just a recent tail. They only accept kernel-provenance text: any local process can write to the general system journal, so text there never produces these findings. If neither kernel source is readable (for example `dmesg` is restricted and you cannot read the journal), the logs collector note says so and these checks do not run.
+
 Recipe validator checks tensor-parallel vs GPU count, container image registry, arm64 compatibility, memory budget, and aggressive `gpu_memory_utilization` / context lengths.
 
 Recipe fields reject unknown keys and invalid numeric values. Tensor parallelism must fit the declared `nodes × gpus_per_node` capacity; single-node recipes also respect `--gpus`. Remote-node capacity is declared, not discovered. Available-memory and architecture checks require `--mem-available-gb` and `--arch`, respectively.
 
-A critical low-power finding requires at least three consecutive qualifying samples. Missing readings, recovered readings, or timestamp gaps break the sequence. Transient readings prompt confirmation and resampling before power-cycle advice.
+A critical low-power finding requires at least three consecutive qualifying samples, each with a GPU clock at or below 800 MHz. Missing readings, recovered readings, or timestamp gaps break the sequence. A sustained run with missing or mixed clocks is a warning; it and transient readings prompt confirmation and resampling rather than power-cycle advice.
 
 Recipes can also declare `runtime.command`, `runtime.quantization`, and an optional top-level `is_moe` override. For vLLM, `--enforce-eager` produces an informational memory/throughput tradeoff note. MXFP4 MoE recipes produce a compatibility warning, not an automatic failure: support depends on the vLLM build and MoE backend. See the [vLLM SM120/SM121 backend documentation](https://docs.vllm.ai/en/latest/features/quantization/b12x/).
 
-Docker collection recognizes named NVIDIA runtimes, runtime hooks, and CDI evidence. The optional `nvidia-ctk cdi list` probe counts NVIDIA GPU device names; failed probes are recorded in collector notes. Optional GPU package imports run in a separate subprocess so a native crash cannot discard the core PyTorch probe results.
+Docker collection recognizes named NVIDIA runtimes, runtime hooks, and CDI evidence. The optional `nvidia-ctk cdi list` probe counts NVIDIA GPU device names; failed probes are recorded in collector notes. Optional GPU package imports run in a separate subprocess so a native crash cannot discard the core PyTorch probe results. Python probes run from an empty temporary directory with `-B`, so files in the directory you scan from cannot shadow the modules being inspected; `PYTHONPATH` is still honored.
+
+Firmware probes (`fwupdmgr`, `mokutil`, `dmidecode`), a missing `dpkg-query`, and an absent Docker install do not make a scan incomplete: firmware notes are informational, and missing Docker is reported as a finding.
 
 ## Privacy
 
 Reports are anonymized by default:
 
-- Locally detected hostname/username and recognized home paths replaced; imported hostnames are inferred from `uname` when available.
-- Private IPv4, IPv6 (including global, link-local, and scoped addresses), and MAC addresses redacted unless `--include-network-identifiers`.
+- Locally detected hostname/username and recognized home paths replaced; imported hostnames are inferred from `uname` when available. A username that is part of a longer name (`nvidia-smi`, `nvcr.io/nvidia/…`) is left intact.
+- All IPv4 addresses (private, public, CGNAT, link-local), IPv6 (including global, link-local, and scoped addresses), and MAC addresses redacted unless `--include-network-identifiers`. Dotted version strings are not treated as addresses.
+- Email addresses redacted.
 - Hardware serial/UUID fields, English firmware serial-number/UUID lines, and NVIDIA GPU UUIDs redacted. Firmware probes use a per-process C locale for stable labels without changing system settings. Firmware model GUIDs and version numbers are preserved. `--include-network-identifiers` does not expose hardware identifiers; only `--include-sensitive-data` bypasses this protection on scans and exports.
-- HF, NGC, OpenAI, bearer, JWT, and SSH-key patterns redacted.
-- Credentials in process arguments (including `--api-key VALUE`) and structured secret fields redacted.
-- Logs (`dmesg`, `journalctl`) are read locally so log-based checks can run, but raw log text is only included in reports with `--include-logs`. Findings may quote a redacted matching line as evidence. `--no-logs` skips reading logs entirely.
+- HF, NGC, OpenAI, GitHub, bearer, JWT, and SSH-key patterns redacted.
+- Credentials in process arguments (including `--api-key VALUE`, `curl -u user:pass`, `docker login -p`), URL userinfo (`scheme://user:pass@host`), and structured secret fields redacted. Dictionary keys are redacted as well as values.
+- Logs (`dmesg`, `journalctl`) are read locally so log-based checks can run. By default a saved scan keeps only the individual log lines that matched a check (`log_evidence`, tagged kernel or journal), redacted like the rest of the report, so `doctor --from` reproduces the same log-based findings. Full raw log tails (last 200 `dmesg` lines and 300 journal lines) are saved only with `--include-logs`. `--no-logs` skips reading logs entirely.
 
 `doctor` and `report` reapply redaction to imported scans by default. `--include-network-identifiers` keeps network identifiers; `--include-sensitive-data` explicitly keeps raw data, including credentials, and replaces the old `scan --no-anonymize` option. Review any report before sharing: automatic redaction cannot recognize every possible secret.
 
 Imported raw logs may still contain bare source usernames when the source identity is unknown, and older firmware captures with translated labels may retain identifiers. Review those captures before sharing.
+
+Scans saved by older versions without `log_evidence`: raw `dmesg_tail` / `journal_tail` are re-checked (journal lines count as kernel lines only in `<host> kernel:` syslog form). If neither evidence nor raw logs were saved, `doctor` keeps the original log-based findings and marks them as carried over from the original scan.
 
 ## Safety
 

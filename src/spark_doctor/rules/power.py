@@ -79,27 +79,51 @@ def _evaluate(report: ScanReport) -> list[Finding]:
     if healthy_clock:
         return [_healthy_clock_finding(evidence)]
 
-    if None in clocks:
-        evidence.insert(1, "GPU clock was not reported, so a low-power state cannot be confirmed or ruled out.")
-
     sustained = len(longest_run) >= 3
-    severity = "critical" if sustained else "warning"
-    confidence = "high" if (sustained and low_clock) else ("medium" if sustained else "low")
+    confirmed = sustained and low_clock
+
+    missing = sum(c is None for c in clocks)
+    if missing:
+        evidence.insert(
+            1,
+            f"GPU clock was not reported for {missing} of {len(clocks)} samples, so a low-power "
+            "state cannot be confirmed or ruled out.",
+        )
+    if sustained and not low_clock:
+        not_low = sum(c is not None and c > LOW_CLOCK_MHZ for c in clocks)
+        if not_low:
+            evidence.insert(
+                1,
+                f"GPU clock was above {LOW_CLOCK_MHZ} MHz in {not_low} of {len(clocks)} samples; "
+                "the stuck low-power state pins every sample at or below that, so it is not confirmed.",
+            )
+
+    if confirmed:
+        explanation = (
+            "Your GPU reports high utilization, unusually low power, and a clock pinned at or below "
+            f"{LOW_CLOCK_MHZ} MHz across consecutive samples. This matches the reported low-power "
+            "state, but does not establish the cause."
+        )
+    elif sustained:
+        explanation = (
+            "Your GPU reports high utilization and unusually low power across consecutive samples, "
+            "but the GPU clock was missing or not consistently low, so these readings do not "
+            "confirm a stuck low-power state or its cause."
+        )
+    else:
+        explanation = (
+            "Your GPU reports high utilization and unusually low power in brief or separated "
+            "samples. These readings do not establish a sustained low-power state or its cause."
+        )
 
     return [
         Finding(
             rule_id=RULE_ID,
             title="Possible GPU low-power state",
-            severity=severity,
-            confidence=confidence,
+            severity="critical" if confirmed else "warning",
+            confidence="high" if confirmed else ("medium" if sustained else "low"),
             evidence=evidence,
-            explanation=(
-                "Your GPU reports high utilization and unusually low power across consecutive "
-                "samples. This may indicate a low-power state, but does not establish the cause."
-                if sustained else
-                "Your GPU reports high utilization and unusually low power in brief or separated "
-                "samples. These readings do not establish a sustained low-power state or its cause."
-            ),
+            explanation=explanation,
             recommended_actions=[
                 "Confirm the readings repeat during a sustained GPU workload before attempting recovery.",
                 "Save all running work.",
@@ -109,14 +133,14 @@ def _evaluate(report: ScanReport) -> list[Finding]:
                 "Plug in and boot.",
                 "Run `spark-doctor scan` again.",
                 "Check DGX Dashboard for updates.",
-            ] if sustained else [
+            ] if confirmed else [
                 "Confirm a sustained GPU workload is running; short or intermittent load can be misleading.",
                 "Collect more samples with `spark-doctor scan --sample-seconds 30` while the workload runs.",
                 "Compare power and clock readings across the samples before deciding on recovery steps.",
             ],
             escalation_actions=[
                 "If this repeats after updates, run NVIDIA Field Diagnostics and include this Spark Doctor report in a forum or support post.",
-            ] if sustained else [],
+            ] if confirmed else [],
             source_note="DGX Spark forum reports of 14 W power cap and low-power states under load.",
         )
     ]

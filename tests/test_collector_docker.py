@@ -115,3 +115,14 @@ def test_collected_cdi_evidence_reaches_runtime_rule(
     assert data["cdi_device_count"] == int(is_nvidia)
     runtime = [f for f in run_rules(report) if f.rule_id == "runtime.docker_unhealthy"]
     assert bool(runtime) is not is_nvidia
+
+
+def test_missing_docker_is_a_complete_diagnosis(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(docker_runtime, "which", lambda cmd: None)
+    monkeypatch.setattr(docker_runtime, "_cdi_specs_present", lambda: False)
+    data, status = docker_runtime.collect_docker()
+    assert data["docker_installed"] is False
+    assert status.ok and not status.errors
+    report = ScanReport(docker=data, collector_statuses=[status])
+    assert not report.incomplete
+    assert any(f.rule_id == "runtime.docker_unhealthy" for f in run_rules(report))

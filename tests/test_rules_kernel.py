@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+from spark_doctor.log_evidence import kernel_evidence
 from spark_doctor.models import ScanReport
 from spark_doctor.rules import run_rules
 from spark_doctor.rules.kernel import rule_gpu_xid_error, rule_memory_oom_killer
@@ -13,7 +14,7 @@ def _fixture() -> ScanReport:
 
 
 def _logs(text: str) -> ScanReport:
-    return ScanReport(logs={"journal_tail": text})
+    return ScanReport(log_evidence=kernel_evidence([text]))
 
 
 def test_host_oom_kill_is_critical_and_deduplicated_across_sources() -> None:

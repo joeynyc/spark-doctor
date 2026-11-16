@@ -62,6 +62,15 @@ class Finding(BaseModel):
     source_note: str = ""
 
 
+class LogEvidence(BaseModel):
+    """One log line that matched a diagnostic signal. Only matched lines are kept so
+    log-based findings can be re-derived after the raw logs are discarded."""
+
+    source: Literal["kernel", "journal"]
+    signal: Literal["oom_kill", "xid", "thermal", "kv_cache_oom"]
+    line: str
+
+
 class ScanReport(BaseModel):
     schema_version: str = "0.1"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -77,6 +86,9 @@ class ScanReport(BaseModel):
     network: dict[str, Any] = Field(default_factory=dict)
     processes: list[ProcessInfo] = Field(default_factory=list)
     logs: dict[str, str] = Field(default_factory=dict)
+    # None marks a scan that predates evidence capture or skipped logs; [] means logs
+    # were read and nothing matched.
+    log_evidence: list[LogEvidence] | None = None
     collector_statuses: list[CollectorStatus] = Field(default_factory=list)
     findings: list[Finding] = Field(default_factory=list)
     reproduction_notes: str | None = None

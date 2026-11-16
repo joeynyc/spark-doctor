@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import tempfile
 from typing import Any
 
 from ..models import CollectorStatus
-from ..shell import run
+from ..shell import run, which
 
 # Runs inside the user's `python3`, not spark-doctor's venv deps: stdlib only,
 # torch imported opportunistically. Must print a single JSON line and never exit nonzero.
@@ -108,6 +111,61 @@ def parse_ldconfig_libcudart(text: str) -> list[str]:
     return sorted(sonames)
 
 
+def _resolve_executable(python_executable: str) -> str:
+    # Relative paths would otherwise be resolved against the probe's temporary cwd.
+    found = which(python_executable)
+    return os.path.abspath(found) if found else python_executable
+
+
+def _run_python_probes(
+    executable: str,
+    python_executable: str,
+    probe_dir: str,
+    out: dict[str, Any],
+    status: CollectorStatus,
+) -> None:
+    # First torch import on this platform can take tens of seconds.
+    probe = run([executable, "-B", "-c", _PY_PROBE], timeout=60, cwd=probe_dir)
+    if probe.ok and probe.stdout.strip():
+        try:
+            parsed = json.loads(probe.stdout.strip().splitlines()[-1])
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("torch_import_ok"), bool):
+                raise ValueError("invalid python result")
+            out["python"] = parsed
+            probe_errors = parsed.get("probe_errors", [])
+            if not isinstance(probe_errors, list) or not all(isinstance(error, str) for error in probe_errors):
+                status.errors.append("python probe: unparseable probe errors")
+            else:
+                status.errors.extend(f"python probe: {error[:200]}" for error in probe_errors)
+            for name in ("torch_cuda_available_error", "torch_arch_list_error"):
+                if parsed.get(name):
+                    status.errors.append(f"python probe {name}: {str(parsed[name])[:200]}")
+        except (ValueError, IndexError):
+            status.errors.append("python probe: unparseable output")
+    elif probe.error == "command_not_found":
+        status.errors.append(f"python probe: {python_executable} not found")
+    else:
+        status.errors.append(f"python probe: {probe.error or 'empty output'}")
+
+    # Isolated probe: importing flash-attn/bitsandbytes can segfault. Run it in a
+    # separate process so a crash here can't lose the torch info above. Only merge
+    # if the core probe produced a python section to attach to.
+    if isinstance(out.get("python"), dict):
+        opt = run([executable, "-B", "-c", _OPTIONAL_PKG_PROBE], timeout=60, cwd=probe_dir)
+        if opt.ok and opt.stdout.strip():
+            try:
+                parsed = json.loads(opt.stdout.strip().splitlines()[-1])
+                if not isinstance(parsed, dict) or not isinstance(
+                    parsed.get("optional_gpu_packages"), dict
+                ):
+                    raise ValueError("invalid optional-package result")
+                out["python"]["optional_gpu_packages"] = parsed["optional_gpu_packages"]
+            except (ValueError, IndexError):
+                status.errors.append("optional-package probe: unparseable output")
+        else:
+            status.errors.append(f"optional-package probe: {opt.error or 'empty output'}")
+
+
 def collect_cuda_env(python_executable: str = "python3") -> tuple[dict[str, Any], CollectorStatus]:
     status = CollectorStatus(name="cuda_env", ok=True)
     out: dict[str, Any] = {"python_executable": python_executable}
@@ -134,46 +192,16 @@ def collect_cuda_env(python_executable: str = "python3") -> tuple[dict[str, Any]
     else:
         status.errors.append(f"ldconfig: {ld.error}: {ld.stderr.strip()[:200]}")
 
-    # First torch import on this platform can take tens of seconds.
-    probe = run([python_executable, "-c", _PY_PROBE], timeout=60)
-    if probe.ok and probe.stdout.strip():
-        try:
-            parsed = json.loads(probe.stdout.strip().splitlines()[-1])
-            if not isinstance(parsed, dict) or not isinstance(parsed.get("torch_import_ok"), bool):
-                raise ValueError("invalid python result")
-            out["python"] = parsed
-            probe_errors = parsed.get("probe_errors", [])
-            if not isinstance(probe_errors, list) or not all(isinstance(error, str) for error in probe_errors):
-                status.errors.append("python probe: unparseable probe errors")
-            else:
-                status.errors.extend(f"python probe: {error[:200]}" for error in probe_errors)
-            for name in ("torch_cuda_available_error", "torch_arch_list_error"):
-                if parsed.get(name):
-                    status.errors.append(f"python probe {name}: {str(parsed[name])[:200]}")
-        except (ValueError, IndexError):
-            status.errors.append("python probe: unparseable output")
-    elif probe.error == "command_not_found":
-        status.errors.append(f"python probe: {python_executable} not found")
+    # The probe's sys.path[0] is its cwd, so the user's cwd could shadow platform/json/torch.
+    try:
+        probe_dir = tempfile.mkdtemp(prefix="spark-doctor-probe-")
+    except OSError as e:
+        status.errors.append(f"python probe: cannot create isolated working directory: {e}")
     else:
-        status.errors.append(f"python probe: {probe.error or 'empty output'}")
-
-    # Isolated probe: importing flash-attn/bitsandbytes can segfault. Run it in a
-    # separate process so a crash here can't lose the torch info above. Only merge
-    # if the core probe produced a python section to attach to.
-    if isinstance(out.get("python"), dict):
-        opt = run([python_executable, "-c", _OPTIONAL_PKG_PROBE], timeout=60)
-        if opt.ok and opt.stdout.strip():
-            try:
-                parsed = json.loads(opt.stdout.strip().splitlines()[-1])
-                if not isinstance(parsed, dict) or not isinstance(
-                    parsed.get("optional_gpu_packages"), dict
-                ):
-                    raise ValueError("invalid optional-package result")
-                out["python"]["optional_gpu_packages"] = parsed["optional_gpu_packages"]
-            except (ValueError, IndexError):
-                status.errors.append("optional-package probe: unparseable output")
-        else:
-            status.errors.append(f"optional-package probe: {opt.error or 'empty output'}")
+        try:
+            _run_python_probes(_resolve_executable(python_executable), python_executable, probe_dir, out, status)
+        finally:
+            shutil.rmtree(probe_dir, ignore_errors=True)
 
     status.ok = len(out) > 1 or not status.errors
     return out, status

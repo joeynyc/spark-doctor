@@ -3,36 +3,31 @@ from __future__ import annotations
 import re
 from collections.abc import Iterator
 
+from .. import log_evidence
+from ..log_evidence import OOM_KILL, XID, Signal
 from ..models import Finding, ScanReport
 from .engine import Rule
-
-_OOM_KILL = re.compile(
-    r"(?P<cgroup>Memory cgroup )?[Oo]ut of memory: Killed process (?P<pid>\d+) \((?P<name>[^)]*)\)"
-)
-_XID = re.compile(r"NVRM: Xid \((?P<device>[^)]*)\): (?P<code>\d+)(?P<rest>[^\n]*)")
 
 # Xids NVIDIA documents as driver, firmware or hardware faults. The rest (13, 31, 43, 45, ...)
 # are usually raised by an application bug or its teardown, so they warrant less alarm.
 _HARDWARE_XIDS = {48, 61, 62, 63, 64, 74, 79, 92, 94, 95, 119, 120}
 
 
-def _log_matches(report: ScanReport, pattern: re.Pattern[str]) -> Iterator[re.Match[str]]:
-    """Yield each distinct match once: the journal also carries kernel lines, so the same
-    event usually appears in both dmesg_tail and journal_tail with different prefixes."""
+def _log_matches(report: ScanReport, signal: Signal, pattern: re.Pattern[str]) -> Iterator[re.Match[str]]:
+    """Yield each distinct kernel event once: dmesg and the kernel journal carry the same
+    event with different prefixes."""
     seen: set[str] = set()
-    for text in report.logs.values():
-        if not isinstance(text, str):
-            continue
-        for match in pattern.finditer(text):
-            if match.group(0) not in seen:
-                seen.add(match.group(0))
-                yield match
+    for evidence in log_evidence.lines_for(report, signal):
+        match = pattern.search(evidence.line)
+        if match and match.group(0) not in seen:
+            seen.add(match.group(0))
+            yield match
 
 
 def _evaluate_oom(report: ScanReport) -> list[Finding]:
-    kills = list(_log_matches(report, _OOM_KILL))
+    kills = list(_log_matches(report, "oom_kill", OOM_KILL))
     if not kills:
-        return []
+        return log_evidence.carried_over(report, "memory.oom_killer")
 
     host_kills = [m for m in kills if not m.group("cgroup")]
     evidence = [
@@ -75,15 +70,15 @@ def _evaluate_oom(report: ScanReport) -> list[Finding]:
             evidence=evidence,
             explanation=explanation,
             recommended_actions=actions,
-            source_note="Kernel 'Out of memory: Killed process' messages in this boot's logs.",
+            source_note="Kernel 'Out of memory: Killed process' messages in this boot's kernel log.",
         )
     ]
 
 
 def _evaluate_xid(report: ScanReport) -> list[Finding]:
-    events = list(_log_matches(report, _XID))
+    events = list(_log_matches(report, "xid", XID))
     if not events:
-        return []
+        return log_evidence.carried_over(report, "gpu.xid_error")
 
     codes = sorted({int(m.group("code")) for m in events})
     hardware = [c for c in codes if c in _HARDWARE_XIDS]
@@ -128,7 +123,7 @@ def _evaluate_xid(report: ScanReport) -> list[Finding]:
             explanation=explanation,
             recommended_actions=actions,
             escalation_actions=escalation,
-            source_note="NVIDIA Xid error catalog; 'NVRM: Xid' messages in this boot's logs.",
+            source_note="NVIDIA Xid error catalog; 'NVRM: Xid' messages in this boot's kernel log.",
         )
     ]
 

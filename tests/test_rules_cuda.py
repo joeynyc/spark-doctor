@@ -124,6 +124,19 @@ def test_unavailable_cuda_device_does_not_imply_cpu_only_torch() -> None:
     assert "cuda.torch_cpu_only" not in _cuda_findings(report)
 
 
+@pytest.mark.parametrize(("arch_list", "flagged"), [
+    # Official cu130 wheels as observed on a real Spark: sm_120 cubins run on sm_121.
+    (["sm_80", "sm_90", "sm_100", "sm_110", "sm_120"], False),
+    (["sm_90", "sm_121a"], False),
+    (["sm_90", "sm_100", "sm_120a"], True),
+    (["sm_80", "sm_86", "sm_90", "compute_90"], True),
+])
+def test_sm121_arch_check_accepts_binary_compatible_builds(arch_list: list[str], flagged: bool) -> None:
+    report = _load("cuda_env_healthy.json")
+    report.cuda_env["python"]["torch_arch_list"] = arch_list
+    assert ("cuda.sm121_not_in_arch_list" in _cuda_findings(report)) is flagged
+
+
 def test_parse_smi_cuda_version():
     banner = "| NVIDIA-SMI 580.95.05    Driver Version: 580.95.05    CUDA Version: 13.0 |"
     assert parse_smi_cuda_version(banner) == "13.0"

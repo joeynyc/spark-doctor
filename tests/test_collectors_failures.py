@@ -51,6 +51,7 @@ def test_firmware_probes_use_private_c_locale_and_preserve_failures(
         assert not data and not status.ok
         assert len(status.errors) == len(calls)
         assert all(error in message for message in status.errors)
+        assert not ScanReport(firmware=data, collector_statuses=[status]).incomplete
     else:
         assert set(data) == {"fwupdmgr", "secure_boot"} | ({"dmidecode"} if use_sudo else set())
         assert status.ok and not status.errors
@@ -64,7 +65,7 @@ def test_firmware_locale_keeps_partial_success_after_failed_probe(monkeypatch: p
     data, status = firmware.collect_firmware(use_sudo=True)
     assert set(data) == {"dmidecode", "secure_boot"}
     assert status.errors == ["fwupdmgr: timeout"]
-    assert ScanReport(firmware=data, collector_statuses=[status]).incomplete
+    assert not ScanReport(firmware=data, collector_statuses=[status]).incomplete
 
 
 @pytest.mark.parametrize("error", ["command_not_found", "nonzero_exit", "timeout"])
@@ -136,6 +137,19 @@ def test_os_malformed_loadavg_preserves_other_data(monkeypatch: pytest.MonkeyPat
     assert any("loadavg" in e for e in status.errors)
 
 
+@pytest.mark.parametrize(("error", "recorded"), [("command_not_found", False), ("timeout", True)])
+def test_os_missing_dpkg_is_not_an_error(
+    monkeypatch: pytest.MonkeyPatch, error: str, recorded: bool,
+) -> None:
+    monkeypatch.setattr(os_info, "read_text", lambda path: "1.0 0.5 0.2 1/100 1" if path != "/etc/os-release" else "ID=fedora\n")
+    monkeypatch.setattr(
+        os_info, "run", lambda args, **kw: result(error=error) if args[0] == "dpkg-query" else result("aarch64")
+    )
+    _, status = os_info.collect_os()
+    assert any("dpkg-query" in e for e in status.errors) is recorded
+    assert ScanReport(collector_statuses=[status]).incomplete is recorded
+
+
 @pytest.mark.parametrize("output", ["", "null", "[]", "not json"])
 def test_core_python_bad_output_is_reported(monkeypatch: pytest.MonkeyPatch, output: str) -> None:
     def run(args: list[str], **kwargs: Any) -> ShellResult:
@@ -153,7 +167,7 @@ def test_cuda_native_probe_failures_are_recorded_with_core_success(monkeypatch: 
     def run(args: list[str], **kwargs: Any) -> ShellResult:
         if args[0] == "chosen-python":
             return result(json.dumps({"torch_import_ok": False, "torch_import_error": "ModuleNotFoundError: No module named 'torch'"})
-                          if args[2] == cuda_env._PY_PROBE else '{"optional_gpu_packages": {}}')
+                          if args[-1] == cuda_env._PY_PROBE else '{"optional_gpu_packages": {}}')
         return result(error="timeout")
 
     monkeypatch.setattr(cuda_env, "run", run)
@@ -201,6 +215,21 @@ def test_gpu_complete_csv_fallback_does_not_claim_failure(monkeypatch: pytest.Mo
     assert data["sampler"] == "csv"
     assert len(samples) == 3
     assert status.ok and not status.errors
+
+
+def test_gpu_collection_does_not_depend_on_pmon(monkeypatch: pytest.MonkeyPatch) -> None:
+    def run(args: list[str], **kwargs: Any) -> ShellResult:
+        if "pmon" in args:
+            return result(error="nonzero_exit")
+        if any(arg.startswith("--query-gpu") for arg in args):
+            return result(CSV_ROW)
+        return result(error="nonzero_exit") if "dmon" in args else result("ok")
+
+    monkeypatch.setattr(gpu, "run", run)
+    monkeypatch.setattr(gpu.time, "sleep", lambda _: None)
+    data, _, status = gpu.collect_gpu(3)
+    assert status.ok and not status.errors
+    assert not ScanReport(gpu=data, collector_statuses=[status]).incomplete
 
 
 @pytest.mark.parametrize("dmon_output", [DMON_HEADER + "0 - - - -\n", DMON_HEADER + "0 14 40 90 500\n"])

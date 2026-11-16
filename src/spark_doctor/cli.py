@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Callable
 from datetime import datetime, timezone
+from enum import Enum
 from math import isfinite
 from pathlib import Path
-from typing import Any, NoReturn, Optional, TypeVar
+from typing import IO, Any, NoReturn, Optional, TypeVar
 
 import typer
 import yaml
@@ -35,6 +37,22 @@ app.add_typer(recipe_app, name="recipe")
 
 console = Console()
 Collected = TypeVar("Collected")
+
+SPARK_DIR = Path(".spark-doctor")
+REPORTS_DIR = SPARK_DIR / "reports"
+
+
+class ReportFormat(str, Enum):
+    markdown = "markdown"
+    forum = "forum"
+    github = "github"
+
+
+_RENDERERS: dict[ReportFormat, Callable[[ScanReport], str]] = {
+    ReportFormat.markdown: render_markdown,
+    ReportFormat.forum: render_forum,
+    ReportFormat.github: render_github,
+}
 
 
 def _exit_code_for(report: ScanReport) -> int:
@@ -84,9 +102,45 @@ def _collect(
     return data
 
 
-def _save_json(report: ScanReport, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(report.model_dump_json(indent=2))
+def _output_error(path: Path, error: OSError) -> NoReturn:
+    # Exit 3, not Python's default 1, which would read as a "warning" diagnosis.
+    typer.echo(redact_text(f"Cannot write {path}: {error.strerror or error}"), err=True)
+    raise typer.Exit(code=3)
+
+
+def _open_private(path: Path, *, exclusive: bool = False) -> IO[str]:
+    # Reports can quote log lines and process arguments; keep new files owner-only.
+    flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if exclusive else os.O_TRUNC)
+    return os.fdopen(os.open(path, flags, 0o600), "w", encoding="utf-8")
+
+
+def _write_output(path: Path, text: str) -> None:
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with _open_private(path) as fh:
+            fh.write(text)
+    except OSError as error:
+        _output_error(path, error)
+
+
+def _save_default(report: ScanReport) -> Path:
+    stamp = report.created_at.strftime("%Y-%m-%dT%H%M%S")
+    try:
+        for directory in (SPARK_DIR, REPORTS_DIR):
+            directory.mkdir(mode=0o700, exist_ok=True)
+        suffix = 0
+        while True:
+            path = REPORTS_DIR / (f"{stamp}-{suffix}.json" if suffix else f"{stamp}.json")
+            try:
+                fh = _open_private(path, exclusive=True)
+            except FileExistsError:
+                suffix += 1
+                continue
+            with fh:
+                fh.write(report.model_dump_json(indent=2))
+            return path
+    except OSError as error:
+        _output_error(REPORTS_DIR, error)
 
 
 def _build_report(
@@ -119,13 +173,15 @@ def _build_report(
     report.network = _collect(report, "network", collect_network, {})
 
     if read_logs:
-        report.logs = _collect(report, "logs", collect_logs, {})
+        logs = _collect(report, "logs", collect_logs, {})
+        report.log_evidence = logs.pop("evidence", [])
+        report.logs = logs
         if not include_logs:
             report.collector_statuses[-1].optional = True
 
     report.findings = run_rules(report)
-    # Logs are read so log-based rules can fire, but raw log text leaves the machine
-    # only on explicit opt-in; findings carry just the redacted matching lines.
+    # Raw log text leaves the machine only on explicit opt-in. The matched lines in
+    # log_evidence are kept so `doctor --from` reproduces the log-based findings.
     if not include_logs:
         report.logs = {}
 
@@ -148,7 +204,7 @@ def scan(
     json_out: Optional[Path] = typer.Option(None, "--json", help="Write JSON report to this path."),
     markdown_out: Optional[Path] = typer.Option(None, "--markdown", help="Write markdown report."),
     no_logs: bool = typer.Option(False, "--no-logs", help="Do not read dmesg/journalctl at all."),
-    include_logs: bool = typer.Option(False, "--include-logs", help="Include dmesg/journalctl snippets in saved reports."),
+    include_logs: bool = typer.Option(False, "--include-logs", help="Include raw dmesg/journalctl tails in saved reports (matched lines are always kept)."),
     use_sudo: bool = typer.Option(False, "--sudo", help="Allow sudo for firmware collection."),
     include_sensitive_data: bool = typer.Option(False, "--include-sensitive-data", help="Keep raw identifiers and credentials in outputs."),
     include_network_identifiers: bool = typer.Option(
@@ -170,16 +226,13 @@ def scan(
     render_console(report, console=console)
 
     if save:
-        stamp = report.created_at.strftime("%Y-%m-%dT%H%M%S")
-        default = Path(".spark-doctor/reports") / f"{stamp}.json"
-        _save_json(report, default)
-        console.print(redact_text(f"\nReport saved: {default}"), markup=False)
+        saved = _save_default(report)
+        console.print(redact_text(f"\nReport saved: {saved}"), markup=False)
 
     if json_out is not None:
-        _save_json(report, json_out)
+        _write_output(json_out, report.model_dump_json(indent=2))
     if markdown_out is not None:
-        markdown_out.parent.mkdir(parents=True, exist_ok=True)
-        markdown_out.write_text(render_markdown(report))
+        _write_output(markdown_out, render_markdown(report))
 
     raise typer.Exit(code=_exit_code_for(report))
 
@@ -202,7 +255,7 @@ def doctor(
 @app.command()
 def report(
     from_file: Path = typer.Option(..., "--from", help="Path to scan JSON."),
-    format: str = typer.Option("markdown", "--format", help="markdown | forum | github"),
+    format: ReportFormat = typer.Option(ReportFormat.markdown, "--format", case_sensitive=False, help="Output format."),
     out: Optional[Path] = typer.Option(None, "--out", help="Write to path instead of stdout."),
     include_sensitive_data: bool = typer.Option(False, "--include-sensitive-data", help="Keep raw identifiers and credentials in output."),
     include_network_identifiers: bool = typer.Option(False, "--include-network-identifiers"),
@@ -213,19 +266,9 @@ def report(
         rep.findings = run_rules(rep)
     if not include_sensitive_data:
         rep = redact_report(rep, include_network_identifiers=include_network_identifiers)
-    fmt = format.lower()
-    if fmt == "markdown":
-        text = render_markdown(rep)
-    elif fmt == "forum":
-        text = render_forum(rep)
-    elif fmt == "github":
-        text = render_github(rep)
-    else:
-        console.print(redact_text(f"Unknown format: {format}"), markup=False)
-        raise typer.Exit(code=3)
+    text = _RENDERERS[format](rep)
     if out is not None:
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(text)
+        _write_output(out, text)
         console.print(redact_text(f"Wrote {out}"), markup=False)
     else:
         typer.echo(text)
@@ -240,8 +283,7 @@ def anonymize(
     """Produce a redacted copy of an existing scan JSON."""
     rep = _load_report(scan_file)
     redacted = redact_report(rep, include_network_identifiers=include_network_identifiers)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(redacted.model_dump_json(indent=2))
+    _write_output(out, redacted.model_dump_json(indent=2))
     console.print(redact_text(f"Wrote redacted report: {out}"), markup=False)
 
 

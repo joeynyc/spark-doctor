@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-import re
-
+from .. import log_evidence
 from ..models import Finding, ScanReport
 from .engine import Rule
 
@@ -12,28 +11,12 @@ from .engine import Rule
 # something a smaller quant fixes. This is a distinct failure from memory.uma_pressure
 # (which is host RAM/PSI) and must not be "fixed" by lowering gpu_memory_utilization,
 # which can make it worse.
-_CACHE_BLOCK_OOM = re.compile(r"no available memory for (?:the )?cache blocks", re.IGNORECASE)
-
-
-def _scan_logs(report: ScanReport) -> list[str]:
-    """Find the cache-block OOM signature in any captured log text (journal, dmesg,
-    or any future backend-log source added to report.logs)."""
-    hits: list[str] = []
-    if not isinstance(report.logs, dict):
-        return hits
-    for key, text in report.logs.items():
-        if not isinstance(text, str) or not text:
-            continue
-        for line in text.splitlines():
-            if _CACHE_BLOCK_OOM.search(line):
-                hits.append(f"{key}: {line.strip()[:200]}")
-    return hits
 
 
 def _evaluate(report: ScanReport) -> list[Finding]:
-    hits = _scan_logs(report)
+    hits = [f"System journal: {e.line[:200]}" for e in log_evidence.lines_for(report, "kv_cache_oom")]
     if not hits:
-        return []
+        return log_evidence.carried_over(report, "backend.kv_cache_oom")
 
     return [
         Finding(
