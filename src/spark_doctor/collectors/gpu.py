@@ -211,11 +211,5 @@ def collect_gpu(sample_seconds: int = 5) -> tuple[dict[str, Any], list[MetricSam
             "gpu_temperature_c": peak.gpu_temperature_c,
         }
 
-    pmon = run(["nvidia-smi", "pmon", "-c", "1"], timeout=5)
-    if pmon.ok:
-        out["pmon"] = pmon.stdout
-    else:
-        status.errors.append(f"nvidia-smi pmon: {pmon.error}: {pmon.stderr.strip()[:200]}")
-
     status.ok = bool(initial or any(_complete_sample(s) for s in samples))
     return out, samples, status

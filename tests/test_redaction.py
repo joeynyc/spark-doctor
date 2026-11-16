@@ -318,3 +318,119 @@ def test_default_report_masks_real_collector_identifier_shapes() -> None:
     with_network = redact_report(report, include_network_identifiers=True).model_dump_json()
     assert "2001:db8::1" in with_network and "fe80::1%eth0" in with_network
     assert uuid not in with_network and "TEST-SERIAL-1234" not in with_network
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("git clone https://joe:hunter2@github.com/x/y.git", "git clone https://<redacted:credentials>@github.com/x/y.git"),
+    ("REDIS_URL=redis://:hunter2@10.0.0.2:6379/0", "REDIS_URL=redis://<redacted:credentials>@<redacted:private_ip>:6379/0"),
+    ("curl -u admin:hunter2 http://x", "curl -u <redacted:secret> http://x"),
+    ("curl --user admin:hunter2 http://x", "curl --user <redacted:secret> http://x"),
+    ("docker login -p hunter2pass nvcr.io", "docker login -p <redacted:secret> nvcr.io"),
+    ("docker login -u '$oauthtoken' --password hunter2pass nvcr.io",
+     "docker login -u '$oauthtoken' --password <redacted:secret> nvcr.io"),
+    ("echo hunter2pass | docker login -u x --password-stdin nvcr.io",
+     "echo <redacted:secret> | docker login -u x --password-stdin nvcr.io"),
+])
+def test_redacts_inline_credentials(text: str, expected: str) -> None:
+    assert redact_text(text, identifiers=IDS) == expected
+    assert redact_text(expected, identifiers=IDS) == expected
+
+
+@pytest.mark.parametrize("text", [
+    "docker run -u 1000:1000 -p 8000:8000 vllm",
+    "docker login --password-stdin nvcr.io && docker run -p 8000:8000 vllm",
+    "pip install --user vllm; sudo -u root ls",
+    "https://github.com/x/y.git ssh://github.com/x",
+])
+def test_keeps_user_flags_and_urls_without_credentials(text: str) -> None:
+    assert redact_text(text, identifiers=IDS) == text
+
+
+@pytest.mark.parametrize("token", [
+    "ghp_" + "A1b2" * 9, "gho_" + "A1b2" * 9, "ghu_" + "A1b2" * 9, "ghs_" + "A1b2" * 9, "ghr_" + "A1b2" * 9,
+    "github_pat_11ABCDEFG0123456789_abcdefghijklmnopqrstuvwxyz0123456789",
+])
+def test_redacts_github_tokens(token: str) -> None:
+    assert redact_text(f"GIT_AUTH {token} done", identifiers=IDS) == "GIT_AUTH <redacted:github_token> done"
+
+
+def test_redacts_email_addresses() -> None:
+    text = "contact joe.smith+spark@example.co.uk, now"
+    assert redact_text(text, identifiers=IDS) == "contact <redacted:email>, now"
+
+
+@pytest.mark.parametrize("address, placeholder", [
+    ("8.8.8.8", "<redacted:ip>"),
+    ("100.64.12.7", "<redacted:ip>"),
+    ("169.254.3.4", "<redacted:ip>"),
+    ("172.16.0.9", "<redacted:private_ip>"),
+    ("127.0.0.1", "<redacted:private_ip>"),
+])
+@pytest.mark.parametrize("template", ["peer {}", "http://{}:8000/v1", "inet {}/24 brd", "--host={}", "at {}."])
+def test_redacts_all_ipv4_addresses(address: str, placeholder: str, template: str) -> None:
+    text = template.format(address)
+    result = redact_text(text, identifiers=IDS)
+    assert result == template.format(placeholder)
+    assert redact_text(result, identifiers=IDS) == result
+    assert redact_text(text, include_network_identifiers=True, identifiers=IDS) == text
+
+
+@pytest.mark.parametrize("text", [
+    "driver 580.95.05 torch 2.5.1 kernel 6.11.0-1016-nvidia CUDA 13.0",
+    "pkg==1.2.3.4", "v1.2.3.4", "version 1.2.3.4", "Version: 1.2.3.4", "pkg-1.2.3.4", "lib_1.2.3.4",
+    "1.2.3.4-1ubuntu1", "1.2.3.4+cu130", "1.2.3.4.5", "+1.2.3.4",
+    "bind 0.0.0.0:8000", "netmask 255.255.255.0", "mdns 224.0.0.251",
+])
+def test_ipv4_redaction_keeps_versions_and_non_host_addresses(text: str) -> None:
+    assert redact_text(text, identifiers=IDS) == text
+
+
+def test_identifier_glued_into_longer_tokens_is_kept() -> None:
+    ids = {"user": "nvidia", "host": "spark-1a2b", "home": "/home/nvidia"}
+    text = "nvcr.io/nvidia/vllm nvidia-smi nvidia-container-runtime nvidia_peermem libnvidia.so spark-1a2b-old"
+    assert redact_text(text, identifiers=ids) == text
+
+
+def test_standalone_identifiers_still_redacted() -> None:
+    ids = {"user": "nvidia", "host": "spark-1a2b", "home": "/home/nvidia"}
+    text = "user nvidia. ssh nvidia@spark-1a2b or spark-1a2b.local; ls /home/nvidia/models /home/other/x"
+    assert redact_text(text, identifiers=ids) == (
+        "user <redacted:user>. ssh <redacted:user>@<redacted:host> or <redacted:host>.local;"
+        " ls <redacted:home>/models <redacted:home>/x"
+    )
+
+
+def test_redact_obj_redacts_dictionary_keys() -> None:
+    obj = {
+        "hf_abcdefghijklmnopqrstuvwxyz": "log text",
+        "/home/zerocool/app.log": {"uuid": "TEST-SERIAL-1234"},
+        "uuid": "GPU-x", "python_executable": "/usr/bin/python3", "mem_total_kb": 1, 7: "int key",
+    }
+    out = redact_obj(obj, identifiers=IDS)
+    assert out == {
+        "<redacted:hf_token>": "log text",
+        "<redacted:home>/app.log": {"uuid": "<redacted:hardware_id>"},
+        "uuid": "<redacted:hardware_id>", "python_executable": "/usr/bin/python3", "mem_total_kb": 1, 7: "int key",
+    }
+    assert redact_obj(out, identifiers=IDS) == out
+
+
+def test_redact_obj_key_collision_keeps_last_value() -> None:
+    out = redact_obj({"user zerocool": "first", "user <redacted:user>": "second"}, identifiers=IDS)
+    assert out == {"user <redacted:user>": "second"}
+
+
+def test_report_keys_redacted_without_renaming_fields_matching_identifiers(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "spark_doctor.privacy.redact._current_identifiers",
+        lambda: {"user": "docker", "host": "name", "home": "/home/docker"},
+    )
+    report = ScanReport(
+        docker={"version": "28.0"},
+        logs={"hf_abcdefghijklmnopqrstuvwxyz": "boot ok", "journal docker": "user docker"},
+        collector_statuses=[{"name": "gpu", "ok": True}],
+    )
+    result = redact_report(report)
+    assert result.docker == {"version": "28.0"}
+    assert result.collector_statuses[0].name == "gpu"
+    assert result.logs == {"<redacted:hf_token>": "boot ok", "journal <redacted:user>": "user <redacted:user>"}

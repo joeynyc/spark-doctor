@@ -12,8 +12,8 @@
     "swap_total_kb": 16000000,
     "swap_free_kb": 2000000,
     "psi_memory": {
-      "some": {"avg10": 0.6, "avg60": 0.4},
-      "full": {"avg10": 0.3, "avg60": 0.2}
+      "some": {"avg10": 24.5, "avg60": 18.2},
+      "full": {"avg10": 8.4, "avg60": 6.1}
     },
     "psi_io": {}
   },

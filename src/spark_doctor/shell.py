@@ -23,41 +23,44 @@ def which(cmd: str) -> str | None:
     return shutil.which(cmd)
 
 
+def _decode_partial(data: bytes | str | None) -> str:
+    # TimeoutExpired carries raw bytes even when the call used text=True.
+    if data is None:
+        return ""
+    if isinstance(data, bytes):
+        return data.decode("utf-8", errors="replace")
+    return data
+
+
 def run(
-    args: list[str] | str,
+    args: list[str],
     *,
     timeout: float = 10.0,
     input_text: str | None = None,
     env: dict[str, str] | None = None,
+    cwd: str | None = None,
 ) -> ShellResult:
     """Run a command, returning a ShellResult. Never raises for normal failures."""
-    if isinstance(args, str):
-        shell = True
-        display = args
-        exe = args
-    else:
-        shell = False
-        display = " ".join(args)
-        exe = args
-        if args and which(args[0]) is None:
-            return ShellResult(
-                command=display,
-                ok=False,
-                returncode=None,
-                stdout="",
-                stderr="",
-                error="command_not_found",
-            )
+    display = " ".join(args)
+    if args and which(args[0]) is None:
+        return ShellResult(
+            command=display,
+            ok=False,
+            returncode=None,
+            stdout="",
+            stderr="",
+            error="command_not_found",
+        )
 
     try:
         proc = subprocess.run(
-            exe,
-            shell=shell,
+            args,
             input=input_text,
             capture_output=True,
             text=True,
             timeout=timeout,
             env=env,
+            cwd=cwd,
             check=False,
         )
         return ShellResult(
@@ -73,8 +76,8 @@ def run(
             command=display,
             ok=False,
             returncode=None,
-            stdout=(e.stdout or "") if isinstance(e.stdout, str) else "",
-            stderr=(e.stderr or "") if isinstance(e.stderr, str) else "",
+            stdout=_decode_partial(e.stdout),
+            stderr=_decode_partial(e.stderr),
             error="timeout",
         )
     except FileNotFoundError:

@@ -127,9 +127,8 @@ def collect_docker() -> tuple[dict[str, Any], CollectorStatus]:
         if out["cdi_device_count"] > 0:
             out["cdi_specs_present"] = True
 
+    # Missing Docker is itself the diagnosis (runtime rule reads docker_installed), not a collector failure.
     if not out["docker_installed"]:
-        status.ok = False
-        status.errors.append("docker not installed")
         _finalize_gpu_readiness(out)
         return out, status
 
