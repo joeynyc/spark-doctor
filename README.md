@@ -59,7 +59,7 @@ An explicitly CPU-tagged PyTorch build with no CUDA support produces a warning f
 | `backend.multiple_heavy_models` | Two or more heavy model backends running concurrently. |
 | `cuda.torch_cu12_wheel` | PyTorch built for CUDA 12 on a CUDA 13 / GB10 system. |
 | `cuda.libcudart_missing` | Package linked against a CUDA runtime (`libcudart.so.N`) that is not installed. |
-| `cuda.sm121_not_in_arch_list` | PyTorch build ships no SM_121 kernels for GB10. |
+| `cuda.sm121_not_in_arch_list` | PyTorch build ships no kernels that run on GB10 (`sm_120`, `sm_121`, or `sm_121a`); arch-specific `sm_120a` alone does not count. |
 | `cuda.nvcc_toolkit_mismatch` | `nvcc` on PATH is older than the driver's CUDA version. |
 | `backend.kv_cache_oom` | vLLM "No available memory for the cache blocks" in the system journal, on a line that mentions vLLM — CUDA-graph memory squeezed out the KV cache (fix: `--enforce-eager`), a distinct failure from host `memory.uma_pressure`. |
 | `memory.oom_killer` | Kernel OOM killer fired this boot (critical), or a container hit its own memory limit (warning). |
