@@ -32,6 +32,7 @@ class MemorySnapshot(BaseModel):
 
 class ProcessInfo(BaseModel):
     pid: int
+    ppid: int | None = None
     command: str
     args: str = ""
     rss_kb: int | None = None

@@ -29,11 +29,33 @@ def test_cu12_wheel_on_cuda13_is_critical():
     assert ids["cuda.torch_cu12_wheel"].severity == "critical"
 
 
-def test_cu12_wheel_fixture_also_flags_nvcc_and_arch():
+def test_cu12_wheel_fixture_also_flags_nvcc_without_duplicate_arch_warning():
     ids = _cuda_findings(_load("cuda_wheel_mismatch.json"))
     assert "cuda.nvcc_toolkit_mismatch" in ids
     assert ids["cuda.nvcc_toolkit_mismatch"].severity == "warning"
-    assert "cuda.sm121_not_in_arch_list" in ids
+    assert "cuda.sm121_not_in_arch_list" not in ids
+
+
+# Arch lists and outcomes observed on a real GB10: cu126 kernels fail, cu128 kernels run.
+@pytest.mark.parametrize(("cuda", "arch_list", "flagged"), [
+    ("12.6", ["sm_80", "sm_90"], True),
+    ("12.8", ["sm_80", "sm_90", "sm_100", "sm_120"], False),
+    ("12.4", None, True),
+    ("12.8", None, False),
+])
+def test_cu12_wheel_flags_only_builds_without_gb10_kernels(
+    cuda: str, arch_list: list[str] | None, flagged: bool,
+) -> None:
+    report = _load("cuda_wheel_mismatch.json")
+    report.cuda_env["python"]["torch_cuda_version"] = cuda
+    report.cuda_env["python"]["torch_arch_list"] = arch_list
+    assert ("cuda.torch_cu12_wheel" in _cuda_findings(report)) is flagged
+
+
+def test_cu12_wheel_is_not_flagged_on_other_gpus():
+    report = _load("cuda_wheel_mismatch.json")
+    report.gpu = {"name": "NVIDIA GeForce RTX 5090", "gpus": [{"name": "NVIDIA GeForce RTX 5090"}]}
+    assert "cuda.torch_cu12_wheel" not in _cuda_findings(report)
 
 
 def test_libcudart_import_failure_is_critical():

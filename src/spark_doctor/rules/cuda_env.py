@@ -44,10 +44,24 @@ def _major(version: str | None) -> int | None:
         return None
 
 
+def _minor(version: str | None) -> int | None:
+    try:
+        return int(str(version).split(".")[1])
+    except (IndexError, ValueError):
+        return None
+
+
+# Cubins run on later minor revisions of the same major, so sm_120 kernels (the official
+# cu128+ wheels) run on GB10's sm_121. Arch-specific sm_120a cubins do not.
+_GB10_COMPATIBLE_ARCH = re.compile(r"sm_120|sm_121a?|compute_121a?")
+
+
+def _has_gb10_kernels(arch_list: list[Any]) -> bool:
+    return any(_GB10_COMPATIBLE_ARCH.fullmatch(str(a)) for a in arch_list)
+
+
 def _needs_cuda13(report: ScanReport) -> bool:
-    driver_major = _major(_cuda_env(report).get("driver_cuda_version"))
-    if driver_major is not None:
-        return driver_major >= 13
+    # Spark-only checks: a CUDA 13 driver on another GPU runs CUDA 12 builds fine.
     return _is_gb10(report)
 
 
@@ -104,30 +118,42 @@ def _eval_torch_cu12(report: ScanReport) -> list[Finding]:
     torch_cuda = py.get("torch_cuda_version")
     if _major(torch_cuda) != 12 or not _needs_cuda13(report):
         return []
+    # On real GB10 hardware a cu128 wheel (sm_120 kernels) runs; a cu126 wheel reports
+    # cuda.is_available() True but every kernel fails with "no kernel image is available".
+    arch_list = py.get("torch_arch_list")
+    if isinstance(arch_list, list) and arch_list:
+        if _has_gb10_kernels(arch_list):
+            return []
+    elif (_minor(torch_cuda) or 0) >= 8:
+        return []
 
     evidence = [f"torch {py.get('torch_version', '?')} built for CUDA {torch_cuda}"]
+    if isinstance(arch_list, list) and arch_list:
+        evidence.append(f"arch list: {', '.join(str(a) for a in arch_list)} (none run on GB10's sm_121)")
     driver_cuda = _cuda_env(report).get("driver_cuda_version")
     if driver_cuda:
         evidence.append(f"driver reports CUDA {driver_cuda}")
-    if _is_gb10(report):
-        evidence.append("GPU is GB10 (SM_121a, requires CUDA 13)")
+    evidence.append("GPU is GB10 (compute capability 12.1)")
     if py.get("torch_cuda_available") is False:
         evidence.append("torch.cuda.is_available() is False")
 
     return [
         Finding(
             rule_id="cuda.torch_cu12_wheel",
-            title="PyTorch built for CUDA 12 on a CUDA 13 system",
+            title="PyTorch CUDA 12 build has no kernels for GB10",
             severity="critical",
             confidence="high",
             evidence=evidence,
             explanation=(
-                "The installed PyTorch wheel targets CUDA 12.x, but DGX Spark (GB10) requires "
-                "CUDA 13. Plain `pip install torch` pulls a cu12 wheel that cannot use this GPU — "
-                "typically torch.cuda.is_available() returns False or kernels fail to load."
+                f"This PyTorch wheel targets CUDA {torch_cuda} and ships no GPU kernels that "
+                "DGX Spark's GB10 can run. torch.cuda.is_available() may still return True, but "
+                "GPU operations fail with 'no kernel image is available for execution on the device'."
             ),
             recommended_actions=_CU13_TORCH_FIX,
-            source_note="GB10 sm_121 requires CUDA 13; PyPI default wheels are cu12.x.",
+            source_note=(
+                "Checked on GB10: a cu126 wheel (sm_90 max) fails every kernel; cu128 (sm_120) "
+                "and cu130 wheels run."
+            ),
         )
     ]
 
@@ -169,11 +195,6 @@ def _eval_libcudart_import_failure(report: ScanReport) -> list[Finding]:
     ]
 
 
-# Cubins run on later minor revisions of the same major, so sm_120 kernels (the official
-# cu130 wheels) run on GB10's sm_121. Arch-specific sm_120a cubins do not.
-_GB10_COMPATIBLE_ARCH = re.compile(r"sm_120|sm_121a?|compute_121a?")
-
-
 def _eval_sm121_arch_missing(report: ScanReport) -> list[Finding]:
     py = _python_info(report)
     if not py.get("torch_import_ok") or not _is_gb10(report):
@@ -181,7 +202,7 @@ def _eval_sm121_arch_missing(report: ScanReport) -> list[Finding]:
     arch_list = py.get("torch_arch_list")
     if not isinstance(arch_list, list) or not arch_list:
         return []
-    if any(_GB10_COMPATIBLE_ARCH.fullmatch(str(a)) for a in arch_list):
+    if _has_gb10_kernels(arch_list):
         return []
 
     return [
@@ -244,9 +265,12 @@ def _evaluate(report: ScanReport) -> list[Finding]:
     if not _cuda_env(report):
         return []
     findings: list[Finding] = []
-    findings.extend(_eval_torch_cu12(report))
+    cu12 = _eval_torch_cu12(report)
+    findings.extend(cu12)
     findings.extend(_eval_libcudart_import_failure(report))
-    findings.extend(_eval_sm121_arch_missing(report))
+    # The cu12 critical already reports the missing GB10 kernels.
+    if not cu12:
+        findings.extend(_eval_sm121_arch_missing(report))
     findings.extend(_eval_nvcc_driver_mismatch(report))
     return findings
 

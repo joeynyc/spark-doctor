@@ -126,6 +126,30 @@ def test_eager_match_requires_an_enabled_flag(command: str) -> None:
     assert "recipe.vllm_enforce_eager" not in _ids(validate_recipe(recipe))
 
 
+def test_eager_flag_still_detected_when_command_has_unbalanced_quote() -> None:
+    recipe = load_recipe(FIXTURES / "recipe_enforce_eager.yaml")
+    recipe.runtime.command = "vllm serve 'unterminated --enforce-eager"
+    assert "recipe.vllm_enforce_eager" in _ids(validate_recipe(recipe))
+
+
+@pytest.mark.parametrize(
+    ("backend", "image", "known"),
+    [
+        ("vllm", "nvcr.io/nvidia/vllm-evil:1", False),
+        ("vllm", "nvcr.io/nvidia/vllm/evil:1", False),
+        ("vllm", "nvcr.io/nvidia/vllm", True),
+        ("vllm", "nvcr.io/nvidia/vllm:25.09-py3", True),
+        ("vllm", "nvcr.io/nvidia/vllm@sha256:" + "a" * 64, True),
+        ("llama.cpp", "ghcr.io/ggml-org/llama.cpp:server-cuda", True),
+    ],
+)
+def test_known_image_matches_only_at_repository_boundary(backend: str, image: str, known: bool) -> None:
+    recipe = load_recipe(FIXTURES / "recipe_ok.yaml")
+    recipe.backend = backend
+    recipe.runtime.container_image = image
+    assert ("recipe.container_mismatch_or_unknown" not in _ids(validate_recipe(recipe))) is known
+
+
 def test_explicit_dense_model_overrides_name_heuristic() -> None:
     recipe = load_recipe(FIXTURES / "recipe_mxfp4_moe.yaml")
     recipe.model = "example/some-moe-model"
