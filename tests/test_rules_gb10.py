@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from spark_doctor.models import ScanReport
 from spark_doctor.rules import run_rules
 
@@ -33,6 +35,31 @@ def test_nemotron_v3_on_0221_local_build_flags():
 def test_nemotron_v3_other_version_no_finding():
     f = _ids(_load("nemotron_v3_other_version.json"))
     assert "backend.nemotron_v3_discards_primed_reasoning" not in f
+
+
+@pytest.mark.parametrize(
+    "args",
+    [
+        "/other/venv/bin/vllm serve nvidia/model --reasoning-parser nemotron_v3",
+        "vllm serve nvidia/model --reasoning-parser nemotron_v3",
+    ],
+)
+def test_nemotron_v3_process_outside_inspected_env_no_finding(args: str) -> None:
+    data = json.loads((FIXTURES / "nemotron_v3_0221.json").read_text())
+    data["processes"][0]["args"] = args
+    f = _ids(ScanReport.model_validate(data))
+    assert "backend.nemotron_v3_discards_primed_reasoning" not in f
+
+
+def test_nemotron_v3_links_via_selected_python_executable() -> None:
+    data = json.loads((FIXTURES / "nemotron_v3_0221.json").read_text())
+    del data["cuda_env"]["python"]["executable"]
+    data["cuda_env"]["python_executable"] = "/opt/venv/bin/python3"
+    data["processes"][0]["args"] = (
+        "/opt/venv/bin/python3 -m vllm.entrypoints.openai.api_server --reasoning-parser nemotron_v3"
+    )
+    f = _ids(ScanReport.model_validate(data))
+    assert "backend.nemotron_v3_discards_primed_reasoning" in f
 
 
 # --- aarch64 + GB10 prebuilt-wheel gap ---------------------------------------

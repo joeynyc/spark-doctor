@@ -94,13 +94,21 @@ def test_log_tails_are_bounded_and_partial_success_survives(monkeypatch: pytest.
     assert status.errors and "journalctl" in status.errors[0]
 
 
-def test_network_failed_ip_probes_are_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_network_without_interfaces_is_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(network, "run", lambda *a, **kw: result(error="command_not_found"))
     monkeypatch.setattr(network.glob, "glob", lambda pattern: [])
     data, status = network.collect_network()
     assert data["interfaces"] == []
-    assert any("ip -br addr" in e for e in status.errors)
-    assert any("ip -br link" in e for e in status.errors)
+    assert not status.ok
+    assert ScanReport(network=data, collector_statuses=[status]).incomplete
+
+
+def test_network_loopback_only_is_complete(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(network, "run", lambda *a, **kw: result(error="command_not_found"))
+    monkeypatch.setattr(network.glob, "glob", lambda pattern: ["/sys/class/net/lo"])
+    data, status = network.collect_network()
+    assert data == {"interfaces": []}
+    assert status.ok and not status.errors
 
 
 @pytest.mark.parametrize("wireless", [False, True])

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from spark_doctor.collectors import docker_runtime
@@ -126,3 +128,22 @@ def test_missing_docker_is_a_complete_diagnosis(monkeypatch: pytest.MonkeyPatch)
     report = ScanReport(docker=data, collector_statuses=[status])
     assert not report.incomplete
     assert any(f.rule_id == "runtime.docker_unhealthy" for f in run_rules(report))
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "present"),
+    [
+        ("README", "kind: nvidia.com/gpu\n", False),
+        ("other.yaml", "cdiVersion: 0.5.0\nkind: vendor.com/device\n", False),
+        ("nvidia.yaml", "---\ncdiVersion: 0.5.0\nkind: nvidia.com/gpu\ndevices: []\n", True),
+        ("nvidia.json", '{"cdiVersion": "0.5.0", "kind": "nvidia.com/gpu", "devices": []}', True),
+    ],
+)
+def test_cdi_dir_counts_only_nvidia_gpu_specs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name: str, content: str, present: bool,
+) -> None:
+    cdi_dir = tmp_path / "cdi"
+    cdi_dir.mkdir()
+    (cdi_dir / name).write_text(content)
+    monkeypatch.setattr(docker_runtime, "CDI_DIRS", (str(tmp_path / "missing"), str(cdi_dir)))
+    assert docker_runtime._cdi_specs_present() is present

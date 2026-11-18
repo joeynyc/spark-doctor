@@ -56,8 +56,8 @@ An explicitly CPU-tagged PyTorch build with no CUDA support produces a warning f
 | `thermal.shutdown_risk` | GPU temp ≥ 85/90 C, or a thermal message in this boot's kernel log. |
 | `memory.uma_pressure` | Low `MemAvailable`, memory PSI `avg10` (percent of time stalled: warning at full ≥ 1% or some ≥ 10%, critical at full ≥ 5%), or heavy swap use. |
 | `runtime.docker_unhealthy` | Docker/NVIDIA container runtime missing or misconfigured. |
-| `backend.multiple_heavy_models` | Two or more heavy model backends running concurrently. |
-| `cuda.torch_cu12_wheel` | PyTorch built for CUDA 12 on a CUDA 13 / GB10 system. |
+| `backend.multiple_heavy_models` | Two or more heavy model servers (≥ ~1 GB RSS) running concurrently, whether different backends or separate instances of the same backend. Worker processes (e.g. vLLM `EngineCore`) count toward their parent server. Scans saved without parent PIDs only compare distinct backends. |
+| `cuda.torch_cu12_wheel` | A CUDA 12 PyTorch build with no kernels GB10 can run (e.g. cu126); cu128+ wheels with `sm_120` kernels are not flagged. |
 | `cuda.libcudart_missing` | Package linked against a CUDA runtime (`libcudart.so.N`) that is not installed. |
 | `cuda.sm121_not_in_arch_list` | PyTorch build ships no kernels that run on GB10 (`sm_120`, `sm_121`, or `sm_121a`); arch-specific `sm_120a` alone does not count. |
 | `cuda.nvcc_toolkit_mismatch` | `nvcc` on PATH is older than the driver's CUDA version. |
@@ -65,13 +65,13 @@ An explicitly CPU-tagged PyTorch build with no CUDA support produces a warning f
 | `memory.oom_killer` | Kernel OOM killer fired this boot (critical), or a container hit its own memory limit (warning). |
 | `gpu.xid_error` | `NVRM: Xid` GPU errors this boot; driver/hardware-class Xids are critical, application-class ones a warning. |
 | `network.nic_link_below_1g` | An active interface with a known link speed below 1 Gb/s. |
-| `backend.nemotron_v3_discards_primed_reasoning` | A vLLM 0.22.1 environment and a process using the `nemotron_v3` reasoning parser; prompt priming still needs manual verification. |
+| `backend.nemotron_v3_discards_primed_reasoning` | vLLM 0.22.1 in the inspected Python environment and a process launched from that environment's `bin` directory using the `nemotron_v3` reasoning parser; prompt priming still needs manual verification. |
 | `cuda.aarch64_prebuilt_wheel_gap` | Optional flash-attn or bitsandbytes imports fail or report a CPU-only build on aarch64 + GB10. |
 | `cuda.torch_cpu_only` | The selected Python successfully imports an explicitly CPU-tagged PyTorch build with no CUDA support. |
 
 OOM, Xid and thermal log checks search the whole current-boot kernel log (`dmesg` and `journalctl -k -b`), not just a recent tail. They only accept kernel-provenance text: any local process can write to the general system journal, so text there never produces these findings. If neither kernel source is readable (for example `dmesg` is restricted and you cannot read the journal), the logs collector note says so and these checks do not run.
 
-Recipe validator checks tensor-parallel vs GPU count, container image registry, arm64 compatibility, memory budget, and aggressive `gpu_memory_utilization` / context lengths.
+Recipe validator checks tensor-parallel vs GPU count, container image registry (an image must be a known repository exactly, optionally followed by a `:tag` or `@digest`), arm64 compatibility, memory budget, and aggressive `gpu_memory_utilization` / context lengths.
 
 Recipe fields reject unknown keys and invalid numeric values. Tensor parallelism must fit the declared `nodes × gpus_per_node` capacity; single-node recipes also respect `--gpus`. Remote-node capacity is declared, not discovered. Available-memory and architecture checks require `--mem-available-gb` and `--arch`, respectively.
 
@@ -79,7 +79,7 @@ A critical low-power finding requires at least three consecutive qualifying samp
 
 Recipes can also declare `runtime.command`, `runtime.quantization`, and an optional top-level `is_moe` override. For vLLM, `--enforce-eager` produces an informational memory/throughput tradeoff note. MXFP4 MoE recipes produce a compatibility warning, not an automatic failure: support depends on the vLLM build and MoE backend. See the [vLLM SM120/SM121 backend documentation](https://docs.vllm.ai/en/latest/features/quantization/b12x/).
 
-Docker collection recognizes named NVIDIA runtimes, runtime hooks, and CDI evidence. The optional `nvidia-ctk cdi list` probe counts NVIDIA GPU device names; failed probes are recorded in collector notes. Optional GPU package imports run in a separate subprocess so a native crash cannot discard the core PyTorch probe results. Python probes run from an empty temporary directory with `-B`, so files in the directory you scan from cannot shadow the modules being inspected; `PYTHONPATH` is still honored.
+Docker collection recognizes named NVIDIA runtimes, runtime hooks, and CDI evidence. In `/etc/cdi` and `/var/run/cdi`, only `.yaml`/`.yml`/`.json` spec files declaring `kind: nvidia.com/gpu` count. The optional `nvidia-ctk cdi list` probe counts NVIDIA GPU device names; failed probes are recorded in collector notes. Optional GPU package imports run in a separate subprocess so a native crash cannot discard the core PyTorch probe results. Python probes run from an empty temporary directory with `-B`, so files in the directory you scan from cannot shadow the modules being inspected; `PYTHONPATH` is still honored.
 
 Firmware probes (`fwupdmgr`, `mokutil`, `dmidecode`), a missing `dpkg-query`, and an absent Docker install do not make a scan incomplete: firmware notes are informational, and missing Docker is reported as a finding.
 

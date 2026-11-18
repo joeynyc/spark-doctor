@@ -6,12 +6,12 @@
   "os": {"arch": "aarch64"},
   "gpu": {"available": true, "gpu_count": 1, "name": "NVIDIA GB10"},
   "cuda_env": {
-    "python": {"packages": {"vllm": "0.22.1+cu128"}}
+    "python": {"executable": "/opt/venv/bin/python3", "packages": {"vllm": "0.22.1+cu128"}}
   },
   "docker": {},
   "network": {},
   "processes": [
-    {"pid": 4321, "command": "python", "args": "vllm serve nvidia/model --reasoning-parser nemotron_v3"}
+    {"pid": 4321, "command": "python", "args": "/opt/venv/bin/vllm serve nvidia/model --reasoning-parser nemotron_v3"}
   ],
   "collector_statuses": [],
   "findings": []

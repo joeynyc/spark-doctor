@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import posixpath
 import re
+import shlex
 from typing import Any
 
 from ..models import Finding, ScanReport
@@ -38,15 +40,42 @@ def _vllm_version(report: ScanReport) -> str | None:
     return None
 
 
+def _probed_bin_dir(report: ScanReport) -> str | None:
+    exe = _python_info(report).get("executable")
+    if not isinstance(exe, str) or not exe:
+        env = report.cuda_env if isinstance(report.cuda_env, dict) else {}
+        exe = env.get("python_executable")
+    # A bare name like "python3" names no directory, so nothing can be linked to it. Saved
+    # reports turn /home/<user> into a placeholder, so a path need not stay absolute.
+    if not isinstance(exe, str) or "/" not in exe:
+        return None
+    return posixpath.dirname(posixpath.normpath(exe))
+
+
+def _argv0(args: str) -> str | None:
+    try:
+        parts = shlex.split(args)
+    except ValueError:
+        parts = args.split()
+    return parts[0] if parts else None
+
+
 def _eval_nemotron_v3_parser(report: ScanReport) -> list[Finding]:
-    procs = []
+    bin_dir = _probed_bin_dir(report)
+    if bin_dir is None:
+        return []
+
+    # The vLLM version comes from the probed interpreter, so only a process launched
+    # from that interpreter's bin directory is known to run that version.
+    linked: list[tuple[int, str]] = []
     for p in report.processes:
         args = p.args or ""
-        if "--reasoning-parser" in args and re.search(
-            r"--reasoning-parser[=\s]+nemotron_v3", args
-        ):
-            procs.append(p)
-    if not procs:
+        if not re.search(r"--reasoning-parser[=\s]+nemotron_v3", args):
+            continue
+        argv0 = _argv0(args)
+        if argv0 and "/" in argv0 and posixpath.dirname(posixpath.normpath(argv0)) == bin_dir:
+            linked.append((p.pid, argv0))
+    if not linked:
         return []
 
     version = _vllm_version(report)
@@ -57,9 +86,11 @@ def _eval_nemotron_v3_parser(report: ScanReport) -> list[Finding]:
         # Heuristic is only known to apply to 0.22.1; skip otherwise.
         return []
 
-    evidence = [f"vLLM version {version} detected"]
-    for p in procs[:3]:
-        evidence.append(f"pid {p.pid}: process cmdline contains --reasoning-parser nemotron_v3")
+    evidence = [f"vLLM version {version} detected in the inspected environment ({bin_dir})"]
+    for pid, argv0 in linked[:3]:
+        evidence.append(
+            f"pid {pid}: {argv0} runs from the inspected environment with --reasoning-parser nemotron_v3"
+        )
 
     return [
         Finding(

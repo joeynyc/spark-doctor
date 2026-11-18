@@ -12,19 +12,11 @@ def collect_network() -> tuple[dict[str, Any], CollectorStatus]:
     status = CollectorStatus(name="network", ok=True)
     out: dict[str, Any] = {"interfaces": []}
 
-    addr = run(["ip", "-br", "addr"], timeout=5)
-    if addr.ok:
-        out["ip_br_addr"] = addr.stdout
-    else:
-        status.errors.append(f"ip -br addr: {addr.error}: {addr.stderr.strip()[:200]}")
-    link = run(["ip", "-br", "link"], timeout=5)
-    if link.ok:
-        out["ip_br_link"] = link.stdout
-    else:
-        status.errors.append(f"ip -br link: {link.error}: {link.stderr.strip()[:200]}")
-
     interfaces: list[dict[str, Any]] = []
-    for path in sorted(glob.glob("/sys/class/net/*")):
+    paths = sorted(glob.glob("/sys/class/net/*"))
+    if not paths:
+        status.errors.append("/sys/class/net: no network interfaces listed")
+    for path in paths:
         name = os.path.basename(path)
         if name == "lo":
             continue
@@ -74,5 +66,5 @@ def collect_network() -> tuple[dict[str, Any], CollectorStatus]:
     ):
         status.errors.append(f"ibstat: {ib.error}: {ib.stderr.strip()[:200]}")
 
-    status.ok = bool(interfaces or addr.ok or link.ok) or not status.errors
+    status.ok = bool(interfaces) or not status.errors
     return out, status

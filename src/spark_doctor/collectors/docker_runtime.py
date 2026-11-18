@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
@@ -10,6 +11,10 @@ from ..models import CollectorStatus
 from ..shell import run, which
 
 CDI_DIRS = ("/etc/cdi", "/var/run/cdi")
+CDI_SPEC_SUFFIXES = (".yaml", ".yml", ".json")
+CDI_SPEC_READ_LIMIT = 64 * 1024
+_YAML_NVIDIA_GPU_KIND = re.compile(r"^\s*kind\s*:\s*['\"]?nvidia\.com/gpu['\"]?\s*(?:#.*)?$", re.MULTILINE)
+_JSON_NVIDIA_GPU_KIND = re.compile(r'"kind"\s*:\s*"nvidia\.com/gpu"')
 
 
 def _local_endpoint(status: CollectorStatus) -> tuple[str | None, dict[str, str]]:
@@ -64,13 +69,29 @@ def _local_endpoint(status: CollectorStatus) -> tuple[str | None, dict[str, str]
     return endpoint, env
 
 
+def _is_nvidia_cdi_spec(path: str) -> bool:
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(CDI_SPEC_READ_LIMIT).decode("utf-8", errors="replace")
+    except OSError:
+        return False
+    return bool(_YAML_NVIDIA_GPU_KIND.search(head) or _JSON_NVIDIA_GPU_KIND.search(head))
+
+
 def _cdi_specs_present() -> bool:
+    """True only when a CDI spec file declares NVIDIA GPU devices; stray files do not count."""
     for d in CDI_DIRS:
         try:
-            if os.path.isdir(d) and any(os.scandir(d)):
-                return True
+            with os.scandir(d) as entries:
+                # is_file() excludes FIFOs and device nodes, whose reads could block.
+                specs = sorted(
+                    e.path for e in entries
+                    if e.name.lower().endswith(CDI_SPEC_SUFFIXES) and e.is_file()
+                )
         except OSError:
             continue
+        if any(_is_nvidia_cdi_spec(p) for p in specs):
+            return True
     return False
 
 

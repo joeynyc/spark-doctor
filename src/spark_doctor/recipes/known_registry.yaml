@@ -8,6 +8,7 @@ backends:
       - ollama/ollama
   llama.cpp:
     known_images:
+      - ghcr.io/ggml-org/llama.cpp
       - ghcr.io/ggerganov/llama.cpp
   sglang:
     known_images:
@@ -18,7 +19,3 @@ backends:
   comfyui:
     known_images:
       - ghcr.io/comfyanonymous/comfyui
-
-arch_incompatible_hints:
-  - x86_64-only
-  - amd64-only

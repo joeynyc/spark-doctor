@@ -49,6 +49,11 @@ def load_recipe(path: str | Path) -> Recipe:
     return Recipe.from_dict(data)
 
 
+def _matches_known_image(image: str, known: str) -> bool:
+    """Match a known repository only at a boundary, so `vllm-evil` does not pass as `vllm`."""
+    return image == known or image.startswith((f"{known}:", f"{known}@"))
+
+
 def _looks_moe(model_name: str) -> bool:
     """Best-effort MoE detection from a model name."""
     m = model_name.lower()
@@ -137,7 +142,7 @@ def validate_recipe(
     try:
         command_args = shlex.split(command)
     except ValueError:
-        command_args = []
+        command_args = command.split()
     if recipe.backend.lower() == "vllm" and "--enforce-eager" in command_args:
         issues.append(
             RecipeIssue(
@@ -210,14 +215,14 @@ def validate_recipe(
         entry = backends_reg.get(recipe.backend.lower()) or {}
         for k in entry.get("known_images", []) or []:
             known.add(k)
-        if known and not any(image.startswith(k) for k in known):
+        if known and not any(_matches_known_image(image, k) for k in known):
             issues.append(
                 RecipeIssue(
                     id="recipe.container_mismatch_or_unknown",
                     severity="warning",
                     title="Container image not in known registry",
                     detail=f"Image '{image}' is not a known validated image for backend '{recipe.backend}'.",
-                    suggested_fix=f"Verify against official playbook. Known prefixes: {sorted(known)}",
+                    suggested_fix=f"Verify against official playbook. Known repositories: {sorted(known)}",
                 )
             )
 
